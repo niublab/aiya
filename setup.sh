@@ -104,7 +104,6 @@ check_dependencies() {
 # 获取公网IP
 get_public_ip() {
     local domain="$1"
-    log_info "获取公网IP地址..."
     
     local ip1=$(dig +short "ip.$domain" @8.8.8.8 2>/dev/null | tail -n1)
     local ip2=$(dig +short "ip.$domain" @1.1.1.1 2>/dev/null | tail -n1)
@@ -125,8 +124,6 @@ get_public_ip() {
 verify_domain_resolution() {
     local domain="$1"
     local expected_ip="$2"
-    
-    log_info "验证域名解析: $domain"
     
     local resolved_ip=$(dig +short "$domain" @8.8.8.8 2>/dev/null | tail -n1)
     
@@ -346,34 +343,34 @@ main() {
         
         case $choice in
             1)
-                collect_configuration
+                collect_configuration || true
                 ;;
             2)
                 if load_configuration; then
-                    deploy_matrix_stack
+                    deploy_matrix_stack || true
                 else
                     log_error "请先配置部署参数"
                 fi
                 ;;
             3)
                 if load_configuration; then
-                    show_configuration_summary
+                    show_configuration_summary || true
                 else
                     log_error "配置文件不存在"
                 fi
                 read -p "按回车键继续..."
                 ;;
             4)
-                cleanup_deployment
+                cleanup_deployment || true
                 ;;
             5)
-                restart_services
+                restart_services || true
                 ;;
             6)
-                show_service_status
+                show_service_status || true
                 ;;
             7)
-                show_logs
+                show_logs || true
                 ;;
             8)
                 log_info "退出部署工具"
@@ -751,7 +748,7 @@ restart_services() {
     if ! load_configuration; then
         log_error "配置文件不存在，无法重启服务"
         read -p "按回车键继续..."
-        return 1
+        return 0
     fi
     
     echo -e "${CYAN}选择重启方式:${NC}"
@@ -843,14 +840,14 @@ show_service_status() {
     if ! load_configuration; then
         log_error "配置文件不存在"
         read -p "按回车键继续..."
-        return 1
+        return 0
     fi
     
     # 检查命名空间是否存在
     if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
         log_error "命名空间 $NAMESPACE 不存在，可能尚未部署"
         read -p "按回车键继续..."
-        return 1
+        return 0
     fi
     
     echo -e "${CYAN}=== Pod状态 ===${NC}"
@@ -905,14 +902,14 @@ show_logs() {
     if ! load_configuration; then
         log_error "配置文件不存在"
         read -p "按回车键继续..."
-        return 1
+        return 0
     fi
     
     # 检查命名空间是否存在
     if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
         log_error "命名空间 $NAMESPACE 不存在，可能尚未部署"
         read -p "按回车键继续..."
-        return 1
+        return 0
     fi
     
     echo -e "${CYAN}选择要查看日志的服务:${NC}"
