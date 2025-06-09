@@ -1,1051 +1,1612 @@
 #!/bin/bash
 
-# AIYA - Matrix服务器一键部署脚本 (修复版)
-# 基于Element Server Suite Community版本
-# 版本: 3.0-fixed
-# 使用方法: bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/setup.sh)
+# Element Server Suite (ESS) Community Edition Deployment Script
+# Improved Version Based on Security and Best Practices Review
+# Version: 2.0
+# Compatible with ESS-Helm Chart 25.6.0
 
-set -e
+# Strict error handling
+set -euo pipefail
 
-# 颜色定义
+# Script configuration
+SCRIPT_VERSION="2.0"
+ESS_CHART_VERSION="25.6.0"
+INSTALL_DIR="/opt/matrix"
+CONFIG_DIR="${INSTALL_DIR}/config"
+LOG_FILE="${INSTALL_DIR}/logs/setup.log"
+NAMESPACE="ess"
+
+# Color definitions for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
+WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
-# 全局变量
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_DIR="$HOME/aiya-config"
-NAMESPACE="matrix"
-DOMAIN=""
+# Configuration variables
+DOMAIN_NAME=""
+SYNAPSE_DOMAIN=""
+AUTH_DOMAIN=""
+RTC_DOMAIN=""
+WEB_DOMAIN=""
 CERT_EMAIL=""
-CERT_MODE="staging"
-CERT_ISSUER="letsencrypt-staging"
-POSTGRES_PASSWORD=""
+ADMIN_EMAIL=""
+CLOUDFLARE_API_TOKEN=""
+CLOUDFLARE_ZONE_ID=""
 
-# 日志函数
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
+# Required ports
+REQUIRED_PORTS=(80 443 30881 30882)
 
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-log_header() {
-    echo -e "${PURPLE}================================${NC}"
-    echo -e "${PURPLE}$1${NC}"
-    echo -e "${PURPLE}================================${NC}"
-}
-
-# 检查系统要求
-check_system_requirements() {
-    log_info "检查系统要求..."
-    
-    # 检查操作系统
-    if [[ ! -f /etc/os-release ]]; then
-        log_error "无法确定操作系统类型"
-        return 1
+# Cleanup function for error handling
+cleanup() {
+    local exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        print_error "Script execution failed with exit code $exit_code"
+        print_info "Cleaning up temporary files..."
+        # Add cleanup logic here if needed
+        print_info "Check logs at: $LOG_FILE"
     fi
-    
-    # 检查是否为root用户
-    if [[ $EUID -ne 0 ]]; then
-        log_error "此脚本需要root权限运行"
-        log_info "请使用: sudo bash setup.sh"
-        return 1
-    fi
-    
-    # 检查内存
-    local memory_gb=$(free -g | awk '/^Mem:/{print $2}')
-    if [[ $memory_gb -lt 2 ]]; then
-        log_warning "系统内存少于2GB，可能影响性能"
-    fi
-    
-    # 检查磁盘空间
-    local disk_space=$(df / | awk 'NR==2{print $4}')
-    if [[ $disk_space -lt 10485760 ]]; then  # 10GB in KB
-        log_warning "根分区可用空间少于10GB，可能影响部署"
-    fi
-    
-    log_success "系统要求检查完成"
 }
 
-# 检查并安装依赖
-check_dependencies() {
-    log_info "检查系统依赖..."
+# Set trap for cleanup
+trap cleanup EXIT
 
-    local deps=("curl" "wget" "jq" "openssl")
-    local missing_deps=()
+# Enhanced logging function
+log() {
+    local message="$1"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] $message" >> "$LOG_FILE"
+}
 
-    for dep in "${deps[@]}"; do
-        if ! command -v "$dep" &> /dev/null; then
-            missing_deps+=("$dep")
+# Print functions with enhanced formatting
+print_message() {
+    local color="$1"
+    local message="$2"
+    echo -e "${color}${message}${NC}"
+    log "$message"
+}
+
+print_title() {
+    echo
+    print_message "$CYAN" "=== $1 ==="
+    echo
+}
+
+print_step() {
+    print_message "$BLUE" "→ $1"
+}
+
+print_success() {
+    print_message "$GREEN" "✓ $1"
+}
+
+print_error() {
+    print_message "$RED" "✗ $1"
+}
+
+print_warning() {
+    print_message "$YELLOW" "⚠ $1"
+}
+
+print_info() {
+    print_message "$WHITE" "ℹ $1"
+}
+
+# Enhanced error exit function
+error_exit() {
+    print_error "$1"
+    log "ERROR: $1"
+    exit 1
+}
+
+# Progress display function
+show_progress() {
+    local current=$1
+    local total=$2
+    local desc=$3
+    local percent=$((current * 100 / total))
+    printf "\r[%3d%%] %s" "$percent" "$desc"
+    if [[ $current -eq $total ]]; then
+        echo
+    fi
+}
+
+# Retry mechanism for network operations
+retry_command() {
+    local cmd="$1"
+    local max_attempts="${2:-3}"
+    local delay="${3:-5}"
+    local attempt=1
+    
+    while [[ $attempt -le $max_attempts ]]; do
+        if eval "$cmd"; then
+            return 0
         fi
-    done
-
-    if [ ${#missing_deps[@]} -ne 0 ]; then
-        log_info "安装缺失的依赖: ${missing_deps[*]}"
         
-        # 更新包管理器
-        if command -v apt-get &> /dev/null; then
-            apt-get update -qq
-            apt-get install -y curl wget jq openssl gnupg2 software-properties-common apt-transport-https ca-certificates
-        elif command -v yum &> /dev/null; then
-            yum update -y
-            yum install -y curl wget jq openssl gnupg2
-        elif command -v dnf &> /dev/null; then
-            dnf update -y
-            dnf install -y curl wget jq openssl gnupg2
+        if [[ $attempt -lt $max_attempts ]]; then
+            print_warning "Command failed, attempt $attempt/$max_attempts. Retrying in ${delay}s..."
+            sleep "$delay"
+        fi
+        ((attempt++))
+    done
+    
+    print_error "Command failed after $max_attempts attempts: $cmd"
+    return 1
+}
+
+# Enhanced command checking
+check_command() {
+    if ! command -v "$1" &> /dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+# Input validation functions
+validate_domain() {
+    local domain="$1"
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$ ]]; then
+        error_exit "Invalid domain format: $domain"
+    fi
+}
+
+validate_email() {
+    local email="$1"
+    if [[ ! "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        error_exit "Invalid email format: $email"
+    fi
+}
+
+# Enhanced directory creation with proper permissions
+create_directories() {
+    print_step "Creating installation directories..."
+    
+    sudo mkdir -p "$INSTALL_DIR"
+    sudo mkdir -p "$CONFIG_DIR"
+    sudo mkdir -p "${INSTALL_DIR}/logs"
+    sudo mkdir -p "${INSTALL_DIR}/data"
+    sudo mkdir -p "${INSTALL_DIR}/backup"
+    
+    # Set proper ownership and permissions
+    sudo chown -R "$USER:$USER" "$INSTALL_DIR"
+    chmod 755 "$INSTALL_DIR"
+    chmod 700 "$CONFIG_DIR"  # More restrictive for config files
+    chmod 755 "${INSTALL_DIR}/logs"
+    chmod 755 "${INSTALL_DIR}/data"
+    chmod 755 "${INSTALL_DIR}/backup"
+    
+    print_success "Directories created successfully"
+}
+
+# Secure configuration file permissions
+secure_config_files() {
+    print_step "Setting secure permissions for configuration files..."
+    
+    if [[ -d "$CONFIG_DIR" ]]; then
+        find "$CONFIG_DIR" -name "*.yaml" -exec chmod 600 {} \;
+        find "$CONFIG_DIR" -name "*.yaml" -exec chown "$USER:$USER" {} \;
+        print_success "Configuration files secured"
+    fi
+}
+
+# Welcome message with version info
+show_welcome() {
+    clear
+    print_title "Element Server Suite Community Edition Deployment"
+    print_info "Script Version: $SCRIPT_VERSION"
+    print_info "Target ESS Chart Version: $ESS_CHART_VERSION"
+    print_info "Based on: https://github.com/element-hq/ess-helm"
+    echo
+    print_info "This script will deploy Element Server Suite Community Edition"
+    print_info "using Kubernetes (K3s) and Helm with enhanced security and best practices."
+    echo
+    print_warning "Please ensure you have:"
+    print_info "  • A clean Debian-based system"
+    print_info "  • At least 2 CPU cores and 2GB RAM"
+    print_info "  • 5GB+ available disk space"
+    print_info "  • Domain names configured in DNS"
+    print_info "  • Email for Let's Encrypt certificates"
+    echo
+    
+    read -p "Press Enter to continue or Ctrl+C to exit..."
+}
+
+# Enhanced system requirements check
+check_system() {
+    print_title "System Requirements Check"
+    
+    # Check OS
+    if [[ ! -f /etc/debian_version ]]; then
+        error_exit "This script only supports Debian-based systems"
+    fi
+    print_success "Operating system: Debian-based ✓"
+    
+    # Check user
+    if [[ $EUID -eq 0 ]]; then
+        error_exit "Please do not run this script as root user"
+    fi
+    print_success "User check: Non-root user ✓"
+    
+    # Check sudo privileges
+    if ! sudo -n true 2>/dev/null; then
+        print_warning "Sudo privileges required. Please enter password:"
+        sudo -v || error_exit "Cannot obtain sudo privileges"
+    fi
+    print_success "Sudo privileges: Available ✓"
+    
+    # Check network connectivity
+    if ! ping -c 1 8.8.8.8 &> /dev/null; then
+        error_exit "Network connection failed. Please check network settings"
+    fi
+    print_success "Network connectivity: Available ✓"
+    
+    # Check disk space (minimum 5GB)
+    local available_space=$(df / | awk 'NR==2 {print $4}')
+    if [[ $available_space -lt 5242880 ]]; then  # 5GB in KB
+        error_exit "Insufficient disk space. At least 5GB available space required"
+    fi
+    print_success "Disk space: Sufficient ✓"
+    
+    # Check memory (minimum 2GB)
+    local total_mem=$(free -m | awk 'NR==2{print $2}')
+    if [[ $total_mem -lt 1800 ]]; then  # Allow some margin
+        print_warning "System has less than 2GB RAM. Performance may be affected"
+    else
+        print_success "Memory: Sufficient ✓"
+    fi
+    
+    # Check CPU cores (minimum 2)
+    local cpu_cores=$(nproc)
+    if [[ $cpu_cores -lt 2 ]]; then
+        print_warning "System has less than 2 CPU cores. Performance may be affected"
+    else
+        print_success "CPU cores: Sufficient ✓"
+    fi
+}
+
+# Network requirements check
+check_network_requirements() {
+    print_title "Network Requirements Check"
+    
+    print_step "Checking port availability..."
+    for port in "${REQUIRED_PORTS[@]}"; do
+        if ss -tuln | grep -q ":$port "; then
+            error_exit "Port $port is already in use. Please free it before continuing"
+        fi
+        print_success "Port $port: Available ✓"
+    done
+    
+    print_step "Checking DNS resolution..."
+    if [[ -n "$DOMAIN_NAME" ]]; then
+        if ! nslookup "$DOMAIN_NAME" &>/dev/null; then
+            print_warning "Domain $DOMAIN_NAME cannot be resolved. Please ensure DNS is configured correctly"
         else
-            log_error "不支持的包管理器，请手动安装依赖"
-            return 1
+            print_success "Domain resolution: $DOMAIN_NAME ✓"
         fi
     fi
-
-    # 检查Docker
-    if ! command -v docker &> /dev/null; then
-        log_info "安装Docker..."
-        install_docker
-    else
-        log_success "Docker已安装"
-    fi
-
-    # 检查Docker Compose
-    if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-        log_info "安装Docker Compose..."
-        install_docker_compose
-    else
-        log_success "Docker Compose已安装"
-    fi
-
-    log_success "所有依赖已满足"
 }
 
-# 安装Docker
-install_docker() {
-    log_info "安装Docker..."
+# Get public IP with multiple methods
+get_public_ip() {
+    print_step "Detecting public IP address..."
     
-    # 卸载旧版本
-    if command -v apt-get &> /dev/null; then
-        apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
-        
-        # 添加Docker官方GPG密钥
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-        
-        # 添加Docker仓库
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-        
-        # 安装Docker
-        apt-get update -qq
-        apt-get install -y docker-ce docker-ce-cli containerd.io
-    elif command -v yum &> /dev/null; then
-        yum remove -y docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine 2>/dev/null || true
-        yum install -y yum-utils
-        yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-        yum install -y docker-ce docker-ce-cli containerd.io
-    fi
+    local ip=""
+    local methods=(
+        "curl -s https://ipv4.icanhazip.com"
+        "curl -s https://api.ipify.org"
+        "curl -s https://checkip.amazonaws.com"
+        "dig +short myip.opendns.com @resolver1.opendns.com"
+    )
     
-    # 启动Docker服务
-    systemctl start docker
-    systemctl enable docker
-    
-    # 验证安装
-    if docker --version &> /dev/null; then
-        log_success "Docker安装成功"
-    else
-        log_error "Docker安装失败"
-        return 1
-    fi
-}
-
-# 安装Docker Compose
-install_docker_compose() {
-    log_info "安装Docker Compose..."
-    
-    # 获取最新版本
-    local compose_version=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | jq -r .tag_name)
-    
-    # 下载并安装
-    curl -L "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    chmod +x /usr/local/bin/docker-compose
-    
-    # 创建符号链接
-    ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
-    
-    # 验证安装
-    if docker-compose --version &> /dev/null; then
-        log_success "Docker Compose安装成功"
-    else
-        log_error "Docker Compose安装失败"
-        return 1
-    fi
-}
-
-# 配置收集菜单
-collect_configuration() {
-    log_header "配置收集"
-
-    # 创建配置目录
-    mkdir -p "$CONFIG_DIR"
-
-    # 域名配置
-    while [[ -z "$DOMAIN" ]]; do
-        echo -e "${CYAN}请输入您的域名 (例如: example.com):${NC}"
-        read -r DOMAIN
-        if [[ -z "$DOMAIN" ]]; then
-            log_error "域名不能为空"
+    for method in "${methods[@]}"; do
+        if ip=$(timeout 10 $method 2>/dev/null) && [[ -n "$ip" ]]; then
+            # Validate IP format
+            if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+                print_success "Public IP detected: $ip"
+                echo "$ip"
+                return 0
+            fi
         fi
     done
+    
+    print_warning "Could not detect public IP automatically"
+    return 1
+}
 
-    # 证书邮箱
-    while [[ -z "$CERT_EMAIL" ]]; do
-        echo -e "${CYAN}请输入证书申请邮箱:${NC}"
-        read -r CERT_EMAIL
-        if [[ -z "$CERT_EMAIL" ]]; then
-            log_error "证书邮箱不能为空"
+# Enhanced domain configuration with validation
+configure_domains() {
+    print_title "Domain Configuration"
+    
+    print_info "You need to configure 5 domain names for ESS Community:"
+    print_info "1. Server name (main domain)"
+    print_info "2. Synapse server"
+    print_info "3. Authentication service"
+    print_info "4. RTC backend"
+    print_info "5. Element Web client"
+    echo
+    
+    # Get public IP
+    local public_ip
+    if public_ip=$(get_public_ip); then
+        print_info "Please ensure all domains point to: $public_ip"
+        echo
+    fi
+    
+    # Server name (main domain)
+    while [[ -z "$DOMAIN_NAME" ]]; do
+        read -p "Enter server name (e.g., matrix.example.com): " DOMAIN_NAME
+        if [[ -n "$DOMAIN_NAME" ]]; then
+            validate_domain "$DOMAIN_NAME"
         fi
     done
+    
+    # Synapse domain
+    while [[ -z "$SYNAPSE_DOMAIN" ]]; do
+        read -p "Enter Synapse domain (e.g., synapse.example.com): " SYNAPSE_DOMAIN
+        if [[ -n "$SYNAPSE_DOMAIN" ]]; then
+            validate_domain "$SYNAPSE_DOMAIN"
+        fi
+    done
+    
+    # Authentication domain
+    while [[ -z "$AUTH_DOMAIN" ]]; do
+        read -p "Enter Authentication service domain (e.g., auth.example.com): " AUTH_DOMAIN
+        if [[ -n "$AUTH_DOMAIN" ]]; then
+            validate_domain "$AUTH_DOMAIN"
+        fi
+    done
+    
+    # RTC domain
+    while [[ -z "$RTC_DOMAIN" ]]; do
+        read -p "Enter RTC backend domain (e.g., rtc.example.com): " RTC_DOMAIN
+        if [[ -n "$RTC_DOMAIN" ]]; then
+            validate_domain "$RTC_DOMAIN"
+        fi
+    done
+    
+    # Web client domain
+    while [[ -z "$WEB_DOMAIN" ]]; do
+        read -p "Enter Element Web domain (e.g., chat.example.com): " WEB_DOMAIN
+        if [[ -n "$WEB_DOMAIN" ]]; then
+            validate_domain "$WEB_DOMAIN"
+        fi
+    done
+    
+    print_success "Domain configuration completed"
+}
 
-    # 证书模式选择
-    echo -e "${CYAN}请选择证书模式:${NC}"
-    echo "1) 测试证书 (Let's Encrypt Staging) - 推荐用于测试"
-    echo "2) 生产证书 (Let's Encrypt Production) - 用于正式环境"
-    read -r cert_choice
+# Enhanced port configuration
+configure_ports() {
+    print_title "Port Configuration"
+    
+    print_info "ESS Community requires the following ports:"
+    print_info "• TCP 80: HTTP (redirects to HTTPS)"
+    print_info "• TCP 443: HTTPS"
+    print_info "• TCP 30881: WebRTC TCP connections"
+    print_info "• UDP 30882: WebRTC UDP connections"
+    echo
+    
+    print_step "Generating port configuration..."
+    cat > "${CONFIG_DIR}/ports.yaml" << EOF
+# Port configuration for ESS Community
+global:
+  ports:
+    http: 80
+    https: 443
+    webrtc:
+      tcp: 30881
+      udp: 30882
 
+# Service-specific port configurations
+services:
+  traefik:
+    ports:
+      web:
+        port: 80
+        exposedPort: 80
+      websecure:
+        port: 443
+        exposedPort: 443
+  
+  matrixRtcBackend:
+    ports:
+      webrtc:
+        tcp: 30881
+        udp: 30882
+EOF
+    
+    print_success "Port configuration generated"
+}
+
+# Certificate configuration with enhanced options
+configure_certificates() {
+    print_title "Certificate Configuration"
+    
+    print_info "Choose certificate configuration method:"
+    print_info "1. Let's Encrypt (automatic, recommended)"
+    print_info "2. Existing wildcard certificate"
+    print_info "3. Individual certificates"
+    print_info "4. External reverse proxy (no TLS in cluster)"
+    echo
+    
+    local cert_choice
+    while [[ ! "$cert_choice" =~ ^[1-4]$ ]]; do
+        read -p "Select option (1-4): " cert_choice
+    done
+    
     case $cert_choice in
         1)
-            CERT_MODE="staging"
-            CERT_ISSUER="letsencrypt-staging"
+            configure_letsencrypt
             ;;
         2)
-            CERT_MODE="production"
-            CERT_ISSUER="letsencrypt-prod"
+            configure_wildcard_cert
             ;;
-        *)
-            log_warning "无效选择，使用测试证书"
-            CERT_MODE="staging"
-            CERT_ISSUER="letsencrypt-staging"
+        3)
+            configure_individual_certs
+            ;;
+        4)
+            configure_external_proxy
             ;;
     esac
-
-    # 生成随机密码
-    POSTGRES_PASSWORD=$(openssl rand -base64 32)
-
-    # 保存配置
-    save_configuration
-
-    # 显示配置摘要
-    show_configuration_summary
 }
 
-# 保存配置
-save_configuration() {
-    cat > "$CONFIG_DIR/config.env" << EOF
-# AIYA Matrix服务器部署配置
-# 生成时间: $(date)
-
-DOMAIN="$DOMAIN"
-CERT_EMAIL="$CERT_EMAIL"
-CERT_MODE="$CERT_MODE"
-CERT_ISSUER="$CERT_ISSUER"
-NAMESPACE="$NAMESPACE"
-POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+# Let's Encrypt configuration
+configure_letsencrypt() {
+    print_step "Configuring Let's Encrypt..."
+    
+    while [[ -z "$CERT_EMAIL" ]]; do
+        read -p "Enter email for Let's Encrypt certificates: " CERT_EMAIL
+        if [[ -n "$CERT_EMAIL" ]]; then
+            validate_email "$CERT_EMAIL"
+        fi
+    done
+    
+    cat > "${CONFIG_DIR}/tls.yaml" << EOF
+# Let's Encrypt TLS configuration
+global:
+  tls:
+    mode: letsencrypt
+    letsencrypt:
+      email: "$CERT_EMAIL"
+      server: https://acme-v02.api.letsencrypt.org/directory
+      
+# Certificate issuer configuration
+certManager:
+  enabled: true
+  issuer:
+    name: letsencrypt-prod
+    email: "$CERT_EMAIL"
+    server: https://acme-v02.api.letsencrypt.org/directory
+    
+# Ingress TLS configuration
+ingress:
+  tls:
+    enabled: true
+    issuer: letsencrypt-prod
 EOF
-
-    log_success "配置已保存到: $CONFIG_DIR/config.env"
+    
+    print_success "Let's Encrypt configuration completed"
 }
 
-# 加载配置
-load_configuration() {
-    if [[ -f "$CONFIG_DIR/config.env" ]]; then
-        source "$CONFIG_DIR/config.env"
-        log_success "配置已加载"
+# Wildcard certificate configuration
+configure_wildcard_cert() {
+    print_step "Configuring wildcard certificate..."
+    
+    print_info "Please ensure your wildcard certificate covers:"
+    print_info "• $DOMAIN_NAME"
+    print_info "• $SYNAPSE_DOMAIN"
+    print_info "• $AUTH_DOMAIN"
+    print_info "• $RTC_DOMAIN"
+    print_info "• $WEB_DOMAIN"
+    echo
+    
+    local cert_path key_path
+    read -p "Enter path to certificate file: " cert_path
+    read -p "Enter path to private key file: " key_path
+    
+    if [[ ! -f "$cert_path" ]] || [[ ! -f "$key_path" ]]; then
+        error_exit "Certificate or key file not found"
+    fi
+    
+    # Import certificate to Kubernetes
+    kubectl create secret tls ess-certificate -n "$NAMESPACE" \
+        --cert="$cert_path" --key="$key_path" || error_exit "Failed to import certificate"
+    
+    cat > "${CONFIG_DIR}/tls.yaml" << EOF
+# Wildcard certificate TLS configuration
+global:
+  tls:
+    mode: existing
+    secretName: ess-certificate
+    
+# Ingress TLS configuration
+ingress:
+  tls:
+    enabled: true
+    secretName: ess-certificate
+EOF
+    
+    print_success "Wildcard certificate configuration completed"
+}
+
+# Individual certificates configuration
+configure_individual_certs() {
+    print_step "Configuring individual certificates..."
+    
+    print_info "You need separate certificates for each domain"
+    
+    local domains=("$WEB_DOMAIN" "$SYNAPSE_DOMAIN" "$AUTH_DOMAIN" "$RTC_DOMAIN" "$DOMAIN_NAME")
+    local secrets=("ess-chat-certificate" "ess-matrix-certificate" "ess-auth-certificate" "ess-rtc-certificate" "ess-well-known-certificate")
+    
+    for i in "${!domains[@]}"; do
+        local domain="${domains[$i]}"
+        local secret="${secrets[$i]}"
+        
+        print_step "Configuring certificate for $domain..."
+        
+        local cert_path key_path
+        read -p "Enter path to certificate file for $domain: " cert_path
+        read -p "Enter path to private key file for $domain: " key_path
+        
+        if [[ ! -f "$cert_path" ]] || [[ ! -f "$key_path" ]]; then
+            error_exit "Certificate or key file not found for $domain"
+        fi
+        
+        kubectl create secret tls "$secret" -n "$NAMESPACE" \
+            --cert="$cert_path" --key="$key_path" || error_exit "Failed to import certificate for $domain"
+    done
+    
+    cat > "${CONFIG_DIR}/tls.yaml" << EOF
+# Individual certificates TLS configuration
+global:
+  tls:
+    mode: individual
+    
+# Service-specific TLS configuration
+services:
+  elementWeb:
+    tls:
+      secretName: ess-chat-certificate
+  synapse:
+    tls:
+      secretName: ess-matrix-certificate
+  matrixAuthenticationService:
+    tls:
+      secretName: ess-auth-certificate
+  matrixRtcBackend:
+    tls:
+      secretName: ess-rtc-certificate
+  wellKnown:
+    tls:
+      secretName: ess-well-known-certificate
+EOF
+    
+    print_success "Individual certificates configuration completed"
+}
+
+# External proxy configuration
+configure_external_proxy() {
+    print_step "Configuring for external reverse proxy..."
+    
+    print_info "External reverse proxy configuration selected"
+    print_info "TLS will be terminated at the reverse proxy level"
+    
+    cat > "${CONFIG_DIR}/tls.yaml" << EOF
+# External reverse proxy TLS configuration
+global:
+  tls:
+    mode: disabled
+    
+# Ingress configuration for external proxy
+ingress:
+  tls:
+    enabled: false
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+EOF
+    
+    print_success "External proxy configuration completed"
+}
+
+# Installation configuration
+configure_installation() {
+    print_title "Installation Configuration"
+    
+    while [[ -z "$ADMIN_EMAIL" ]]; do
+        read -p "Enter administrator email: " ADMIN_EMAIL
+        if [[ -n "$ADMIN_EMAIL" ]]; then
+            validate_email "$ADMIN_EMAIL"
+        fi
+    done
+    
+    print_success "Installation configuration completed"
+}
+
+# Configuration summary
+show_configuration_summary() {
+    print_title "Configuration Summary"
+    
+    print_info "Installation Directory: $INSTALL_DIR"
+    print_info "Namespace: $NAMESPACE"
+    print_info "ESS Chart Version: $ESS_CHART_VERSION"
+    echo
+    print_info "Domain Configuration:"
+    print_info "  Server Name: $DOMAIN_NAME"
+    print_info "  Synapse: $SYNAPSE_DOMAIN"
+    print_info "  Authentication: $AUTH_DOMAIN"
+    print_info "  RTC Backend: $RTC_DOMAIN"
+    print_info "  Element Web: $WEB_DOMAIN"
+    echo
+    print_info "Administrator Email: $ADMIN_EMAIL"
+    if [[ -n "$CERT_EMAIL" ]]; then
+        print_info "Certificate Email: $CERT_EMAIL"
+    fi
+    echo
+    
+    read -p "Continue with this configuration? (y/N): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        print_info "Configuration cancelled"
+        exit 0
+    fi
+}
+
+# Save configuration to file
+save_configuration() {
+    print_step "Saving configuration..."
+    
+    cat > "${CONFIG_DIR}/main.yaml" << EOF
+# ESS Community Main Configuration
+# Generated on: $(date)
+# Script Version: $SCRIPT_VERSION
+
+metadata:
+  version: "$SCRIPT_VERSION"
+  chartVersion: "$ESS_CHART_VERSION"
+  generatedAt: "$(date -Iseconds)"
+  
+installation:
+  directory: "$INSTALL_DIR"
+  namespace: "$NAMESPACE"
+  
+domains:
+  serverName: "$DOMAIN_NAME"
+  synapse: "$SYNAPSE_DOMAIN"
+  authentication: "$AUTH_DOMAIN"
+  rtcBackend: "$RTC_DOMAIN"
+  elementWeb: "$WEB_DOMAIN"
+  
+contacts:
+  adminEmail: "$ADMIN_EMAIL"
+  certEmail: "$CERT_EMAIL"
+  
+network:
+  requiredPorts: [${REQUIRED_PORTS[*]}]
+EOF
+    
+    secure_config_files
+    print_success "Configuration saved to ${CONFIG_DIR}/main.yaml"
+}
+
+# Enhanced dependency installation with retry
+install_dependencies() {
+    print_title "Installing Dependencies"
+    
+    print_step "Updating package lists..."
+    retry_command "sudo apt-get update" 3 5
+    
+    local packages=(
+        "curl"
+        "wget"
+        "gnupg"
+        "lsb-release"
+        "ca-certificates"
+        "apt-transport-https"
+        "software-properties-common"
+        "dnsutils"
+        "net-tools"
+        "jq"
+    )
+    
+    print_step "Installing required packages..."
+    for package in "${packages[@]}"; do
+        if ! dpkg -l | grep -q "^ii  $package "; then
+            print_step "Installing $package..."
+            retry_command "sudo apt-get install -y $package" 3 5
+        else
+            print_success "$package already installed"
+        fi
+    done
+    
+    print_success "Dependencies installation completed"
+}
+
+# K3s installation with enhanced configuration
+install_k3s() {
+    print_title "Installing K3s"
+    
+    if check_command k3s; then
+        print_success "K3s already installed"
         return 0
+    fi
+    
+    print_step "Installing K3s..."
+    local k3s_config="--default-local-storage-path=${INSTALL_DIR}/data/k3s-storage"
+    k3s_config+=" --disable=traefik"  # We'll configure Traefik separately
+    
+    retry_command "curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC=\"server ${k3s_config}\" sh -" 3 10
+    
+    print_step "Configuring kubectl access..."
+    mkdir -p ~/.kube
+    export KUBECONFIG=~/.kube/config
+    sudo k3s kubectl config view --raw > "$KUBECONFIG"
+    chmod 600 "$KUBECONFIG"
+    chown "$USER:$USER" "$KUBECONFIG"
+    
+    # Add to bashrc for persistence
+    if ! grep -q "export KUBECONFIG=~/.kube/config" ~/.bashrc; then
+        echo "export KUBECONFIG=~/.kube/config" >> ~/.bashrc
+    fi
+    
+    print_step "Waiting for K3s to be ready..."
+    local retries=0
+    while ! sudo k3s kubectl get nodes &>/dev/null; do
+        if [[ $retries -ge 30 ]]; then
+            error_exit "K3s startup timeout"
+        fi
+        sleep 2
+        ((retries++))
+    done
+    
+    print_success "K3s installation completed"
+}
+
+# Traefik configuration for custom ports
+configure_k3s_ports() {
+    print_title "Configuring K3s Networking"
+    
+    print_step "Installing Traefik with custom configuration..."
+    
+    sudo tee /var/lib/rancher/k3s/server/manifests/traefik-config.yaml > /dev/null << EOF
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    ports:
+      web:
+        port: 8080
+        exposedPort: 80
+      websecure:
+        port: 8443
+        exposedPort: 443
+      webrtc-tcp:
+        port: 30881
+        exposedPort: 30881
+        protocol: TCP
+      webrtc-udp:
+        port: 30882
+        exposedPort: 30882
+        protocol: UDP
+    service:
+      type: LoadBalancer
+    additionalArguments:
+      - "--entrypoints.webrtc-tcp.address=:30881/tcp"
+      - "--entrypoints.webrtc-udp.address=:30882/udp"
+EOF
+    
+    print_step "Restarting K3s to apply Traefik configuration..."
+    sudo systemctl restart k3s
+    
+    # Wait for Traefik to be ready
+    print_step "Waiting for Traefik to be ready..."
+    local retries=0
+    while ! sudo k3s kubectl get pods -n kube-system | grep traefik | grep -q Running; do
+        if [[ $retries -ge 60 ]]; then
+            error_exit "Traefik startup timeout"
+        fi
+        sleep 2
+        ((retries++))
+    done
+    
+    print_success "Traefik configuration completed"
+}
+
+# Helm installation
+install_helm() {
+    print_title "Installing Helm"
+    
+    if check_command helm; then
+        print_success "Helm already installed"
+        return 0
+    fi
+    
+    print_step "Installing Helm..."
+    retry_command "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash" 3 10
+    
+    print_success "Helm installation completed"
+}
+
+# Namespace creation
+create_namespace() {
+    print_title "Creating Kubernetes Namespace"
+    
+    print_step "Creating namespace: $NAMESPACE"
+    if ! sudo k3s kubectl get namespace "$NAMESPACE" &>/dev/null; then
+        sudo k3s kubectl create namespace "$NAMESPACE"
+        print_success "Namespace '$NAMESPACE' created"
     else
-        log_warning "配置文件不存在"
+        print_success "Namespace '$NAMESPACE' already exists"
+    fi
+}
+
+# Cert-manager installation with enhanced configuration
+install_cert_manager() {
+    print_title "Installing Cert-Manager"
+    
+    # Check if cert-manager is already installed
+    if sudo k3s kubectl get namespace cert-manager &>/dev/null; then
+        print_success "Cert-manager already installed"
+        return 0
+    fi
+    
+    print_step "Adding Jetstack Helm repository..."
+    retry_command "helm repo add jetstack https://charts.jetstack.io --force-update" 3 5
+    
+    print_step "Updating Helm repositories..."
+    retry_command "helm repo update" 3 5
+    
+    print_step "Installing cert-manager..."
+    retry_command "helm install cert-manager jetstack/cert-manager \
+        --namespace cert-manager \
+        --create-namespace \
+        --version v1.17.0 \
+        --set crds.enabled=true \
+        --wait \
+        --timeout=10m" 3 10
+    
+    # Create ClusterIssuer for Let's Encrypt if using Let's Encrypt
+    if [[ -n "$CERT_EMAIL" ]]; then
+        print_step "Creating Let's Encrypt ClusterIssuer..."
+        sudo k3s kubectl apply -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: $CERT_EMAIL
+    privateKeySecretRef:
+      name: letsencrypt-prod-private-key
+    solvers:
+      - http01:
+          ingress:
+            class: traefik
+EOF
+    fi
+    
+    print_success "Cert-manager installation completed"
+}
+
+# Cloudflare DNS configuration (optional)
+configure_cloudflare_dns() {
+    print_title "Cloudflare DNS Configuration (Optional)"
+    
+    print_info "Do you want to configure Cloudflare DNS validation for certificates?"
+    print_info "This is useful for wildcard certificates or when HTTP validation is not possible."
+    echo
+    
+    read -p "Configure Cloudflare DNS? (y/N): " use_cloudflare
+    if [[ ! "$use_cloudflare" =~ ^[Yy]$ ]]; then
+        print_info "Skipping Cloudflare DNS configuration"
+        return 0
+    fi
+    
+    read -p "Enter Cloudflare API Token: " CLOUDFLARE_API_TOKEN
+    read -p "Enter Cloudflare Zone ID: " CLOUDFLARE_ZONE_ID
+    
+    if [[ -z "$CLOUDFLARE_API_TOKEN" ]] || [[ -z "$CLOUDFLARE_ZONE_ID" ]]; then
+        print_warning "Cloudflare credentials not provided, skipping DNS configuration"
+        return 0
+    fi
+    
+    # Create Cloudflare secret
+    sudo k3s kubectl create secret generic cloudflare-api-token-secret \
+        --from-literal=api-token="$CLOUDFLARE_API_TOKEN" \
+        -n cert-manager
+    
+    # Create DNS ClusterIssuer
+    sudo k3s kubectl apply -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-dns-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: $CERT_EMAIL
+    privateKeySecretRef:
+      name: letsencrypt-dns-prod-private-key
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token-secret
+              key: api-token
+        selector:
+          dnsZones:
+            - "$DOMAIN_NAME"
+EOF
+    
+    print_success "Cloudflare DNS validation configured"
+}
+
+# Generate enhanced ESS configuration
+generate_ess_config() {
+    print_title "Generating ESS Configuration Files"
+    
+    print_step "Generating hostname configuration..."
+    cat > "${CONFIG_DIR}/hostnames.yaml" << EOF
+# ESS Community hostname configuration
+# Generated on: $(date)
+
+global:
+  hosts:
+    serverName: "$DOMAIN_NAME"
+    synapse: "$SYNAPSE_DOMAIN"
+    elementWeb: "$WEB_DOMAIN"
+    matrixAuthenticationService: "$AUTH_DOMAIN"
+    matrixRtcBackend: "$RTC_DOMAIN"
+  
+  # Server configuration
+  server:
+    name: "$DOMAIN_NAME"
+    
+  # Well-known delegation
+  wellKnown:
+    enabled: true
+    server: "$SYNAPSE_DOMAIN"
+    
+# Deployment markers for tracking
+deploymentMarkers:
+  enabled: true
+  version: "$ESS_CHART_VERSION"
+  deployedAt: "$(date -Iseconds)"
+  deployedBy: "$USER"
+EOF
+    
+    print_step "Generating resource configuration..."
+    cat > "${CONFIG_DIR}/resources.yaml" << EOF
+# Resource limits and requests configuration
+# Optimized for production deployment
+
+global:
+  resources:
+    # Default resource settings
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+# Service-specific resource configuration
+synapse:
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+  
+  # Synapse-specific configuration
+  config:
+    workers:
+      enabled: true
+      count: 2
+    
+postgresql:
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+  
+  # PostgreSQL configuration
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: "local-path"
+
+matrixAuthenticationService:
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+matrixRtcBackend:
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+elementWeb:
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+EOF
+    
+    print_step "Generating security configuration..."
+    cat > "${CONFIG_DIR}/security.yaml" << EOF
+# Security configuration for ESS Community
+# Implements security best practices
+
+global:
+  # Security context for all pods
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  
+  # Pod security context
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  
+  # Container security context
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+    capabilities:
+      drop:
+        - ALL
+
+# Network policies
+networkPolicy:
+  enabled: true
+  ingress:
+    enabled: true
+  egress:
+    enabled: true
+
+# Pod disruption budgets
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Service mesh configuration (if using Istio)
+serviceMesh:
+  enabled: false
+  mtls:
+    mode: STRICT
+EOF
+    
+    print_step "Generating monitoring configuration..."
+    cat > "${CONFIG_DIR}/monitoring.yaml" << EOF
+# Monitoring and observability configuration
+
+# Prometheus monitoring
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+  
+  # Grafana dashboards
+  grafana:
+    enabled: true
+    dashboards:
+      enabled: true
+  
+  # Alerting rules
+  prometheusRule:
+    enabled: true
+    rules:
+      - alert: SynapseDown
+        expr: up{job="synapse"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Synapse is down"
+          description: "Synapse has been down for more than 5 minutes"
+
+# Logging configuration
+logging:
+  enabled: true
+  level: INFO
+  
+  # Log aggregation
+  fluentd:
+    enabled: false
+  
+  # Log retention
+  retention:
+    days: 30
+
+# Health checks
+healthChecks:
+  enabled: true
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  
+  startupProbe:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+EOF
+    
+    secure_config_files
+    print_success "ESS configuration files generated"
+}
+
+# Configuration validation
+validate_configuration() {
+    print_title "Validating Configuration"
+    
+    print_step "Validating YAML syntax..."
+    for config_file in "${CONFIG_DIR}"/*.yaml; do
+        if [[ -f "$config_file" ]]; then
+            if ! python3 -c "import yaml; yaml.safe_load(open('$config_file'))" 2>/dev/null; then
+                error_exit "Configuration file syntax error: $config_file"
+            fi
+            print_success "$(basename "$config_file"): Valid ✓"
+        fi
+    done
+    
+    print_step "Validating Kubernetes connectivity..."
+    if ! sudo k3s kubectl cluster-info &>/dev/null; then
+        error_exit "Kubernetes cluster is not accessible"
+    fi
+    print_success "Kubernetes connectivity: OK ✓"
+    
+    print_step "Validating Helm repositories..."
+    if ! helm repo list | grep -q jetstack; then
+        print_warning "Jetstack repository not found, adding..."
+        helm repo add jetstack https://charts.jetstack.io --force-update
+    fi
+    print_success "Helm repositories: OK ✓"
+    
+    print_success "Configuration validation completed"
+}
+
+# Enhanced ESS deployment
+deploy_ess() {
+    print_title "Deploying ESS Community"
+    
+    validate_configuration
+    
+    print_step "Deploying Matrix Stack with Helm..."
+    print_info "Chart Version: $ESS_CHART_VERSION"
+    print_info "Namespace: $NAMESPACE"
+    
+    # Prepare Helm command with all configuration files
+    local helm_cmd="helm upgrade --install --namespace \"$NAMESPACE\" ess"
+    helm_cmd+=" oci://ghcr.io/element-hq/ess-helm/matrix-stack"
+    helm_cmd+=" --version \"$ESS_CHART_VERSION\""
+    helm_cmd+=" -f \"${CONFIG_DIR}/hostnames.yaml\""
+    helm_cmd+=" -f \"${CONFIG_DIR}/tls.yaml\""
+    helm_cmd+=" -f \"${CONFIG_DIR}/ports.yaml\""
+    helm_cmd+=" -f \"${CONFIG_DIR}/resources.yaml\""
+    helm_cmd+=" -f \"${CONFIG_DIR}/security.yaml\""
+    helm_cmd+=" -f \"${CONFIG_DIR}/monitoring.yaml\""
+    helm_cmd+=" --wait"
+    helm_cmd+=" --timeout=20m"
+    
+    # Execute deployment with retry
+    retry_command "$helm_cmd" 2 30
+    
+    print_step "Waiting for all pods to be ready..."
+    local retries=0
+    local max_retries=60
+    
+    while true; do
+        local pending_pods=$(sudo k3s kubectl get pods -n "$NAMESPACE" --field-selector=status.phase!=Running,status.phase!=Succeeded -o name 2>/dev/null | wc -l)
+        
+        if [[ $pending_pods -eq 0 ]]; then
+            break
+        fi
+        
+        if [[ $retries -ge $max_retries ]]; then
+            print_error "Timeout waiting for pods to be ready"
+            sudo k3s kubectl get pods -n "$NAMESPACE"
+            error_exit "Deployment timeout"
+        fi
+        
+        show_progress $retries $max_retries "Waiting for pods to be ready... ($pending_pods pending)"
+        sleep 5
+        ((retries++))
+    done
+    
+    print_success "ESS Community deployment completed"
+}
+
+# Create initial user with enhanced options
+create_initial_user() {
+    print_title "Creating Initial User"
+    
+    print_info "ESS Community does not allow user registration by default."
+    print_info "You need to create an initial administrator user."
+    echo
+    
+    read -p "Create initial user now? (Y/n): " create_user
+    if [[ "$create_user" =~ ^[Nn]$ ]]; then
+        print_info "Skipping user creation. You can create users later using:"
+        print_info "kubectl exec -n $NAMESPACE -it deploy/ess-matrix-authentication-service -- mas-cli manage register-user"
+        return 0
+    fi
+    
+    print_step "Creating initial user..."
+    print_info "Follow the prompts to create your administrator user:"
+    
+    # Interactive user creation
+    sudo k3s kubectl exec -n "$NAMESPACE" -it deploy/ess-matrix-authentication-service -- mas-cli manage register-user
+    
+    print_success "Initial user creation completed"
+}
+
+# Backup functionality
+backup_configuration() {
+    print_title "Creating Configuration Backup"
+    
+    local backup_dir="${INSTALL_DIR}/backup/config-$(date +%Y%m%d-%H%M%S)"
+    print_step "Creating backup directory: $backup_dir"
+    
+    mkdir -p "$backup_dir"
+    cp -r "${CONFIG_DIR}"/* "$backup_dir/"
+    
+    # Create backup metadata
+    cat > "$backup_dir/backup-info.yaml" << EOF
+# Backup Information
+backupDate: "$(date -Iseconds)"
+scriptVersion: "$SCRIPT_VERSION"
+chartVersion: "$ESS_CHART_VERSION"
+namespace: "$NAMESPACE"
+domains:
+  serverName: "$DOMAIN_NAME"
+  synapse: "$SYNAPSE_DOMAIN"
+  authentication: "$AUTH_DOMAIN"
+  rtcBackend: "$RTC_DOMAIN"
+  elementWeb: "$WEB_DOMAIN"
+EOF
+    
+    # Set secure permissions
+    chmod -R 600 "$backup_dir"
+    chown -R "$USER:$USER" "$backup_dir"
+    
+    print_success "Configuration backup created: $backup_dir"
+}
+
+# Database backup functionality
+backup_database() {
+    print_title "Creating Database Backup"
+    
+    local backup_file="${INSTALL_DIR}/backup/postgres-$(date +%Y%m%d-%H%M%S).sql"
+    print_step "Creating database backup: $backup_file"
+    
+    # Create database backup
+    if sudo k3s kubectl exec -n "$NAMESPACE" deployment/ess-postgresql -- pg_dump -U synapse synapse > "$backup_file"; then
+        chmod 600 "$backup_file"
+        chown "$USER:$USER" "$backup_file"
+        print_success "Database backup created: $backup_file"
+    else
+        print_error "Database backup failed"
         return 1
     fi
 }
 
-# 显示配置摘要
-show_configuration_summary() {
-    log_header "配置摘要"
-    echo -e "${CYAN}域名:${NC} $DOMAIN"
-    echo -e "${CYAN}Matrix服务器:${NC} https://$DOMAIN"
-    echo -e "${CYAN}Element Web:${NC} https://element.$DOMAIN"
-    echo -e "${CYAN}证书模式:${NC} $CERT_MODE"
-    echo -e "${CYAN}证书邮箱:${NC} $CERT_EMAIL"
-    echo ""
-}
-
-# 生成Docker Compose配置
-generate_docker_compose() {
-    log_info "生成Docker Compose配置..."
-
-    cat > "$CONFIG_DIR/docker-compose.yml" << EOF
-version: '3.8'
-
-services:
-  # PostgreSQL数据库
-  postgres:
-    image: postgres:15-alpine
-    container_name: matrix-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: synapse
-      POSTGRES_USER: synapse
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - matrix_network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U synapse"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Synapse Matrix服务器
-  synapse:
-    image: matrixdotorg/synapse:latest
-    container_name: matrix-synapse
-    restart: unless-stopped
-    environment:
-      SYNAPSE_SERVER_NAME: ${DOMAIN}
-      SYNAPSE_REPORT_STATS: "no"
-    volumes:
-      - synapse_data:/data
-      - ./synapse:/config
-    networks:
-      - matrix_network
-    depends_on:
-      postgres:
-        condition: service_healthy
-    ports:
-      - "8008:8008"
-      - "8448:8448"
-
-  # Element Web客户端
-  element:
-    image: vectorim/element-web:latest
-    container_name: matrix-element
-    restart: unless-stopped
-    volumes:
-      - ./element/config.json:/app/config.json:ro
-    networks:
-      - matrix_network
-    ports:
-      - "8080:80"
-
-  # Nginx反向代理
-  nginx:
-    image: nginx:alpine
-    container_name: matrix-nginx
-    restart: unless-stopped
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro
-      - certbot_data:/var/www/certbot:ro
-    networks:
-      - matrix_network
-    ports:
-      - "80:80"
-      - "443:443"
-    depends_on:
-      - synapse
-      - element
-
-  # Certbot证书管理
-  certbot:
-    image: certbot/certbot:latest
-    container_name: matrix-certbot
-    volumes:
-      - certbot_data:/var/www/certbot
-      - ./nginx/ssl:/etc/letsencrypt
-    command: certonly --webroot --webroot-path=/var/www/certbot --email ${CERT_EMAIL} --agree-tos --no-eff-email -d ${DOMAIN} -d element.${DOMAIN}
-
-volumes:
-  postgres_data:
-  synapse_data:
-  certbot_data:
-
-networks:
-  matrix_network:
-    driver: bridge
-EOF
-
-    log_success "Docker Compose配置生成完成"
-}
-
-# 生成Synapse配置
-generate_synapse_config() {
-    log_info "生成Synapse配置..."
-
-    mkdir -p "$CONFIG_DIR/synapse"
-
-    cat > "$CONFIG_DIR/synapse/homeserver.yaml" << EOF
-# Synapse配置文件
-server_name: "${DOMAIN}"
-pid_file: /data/homeserver.pid
-web_client_location: https://element.${DOMAIN}
-public_baseurl: https://${DOMAIN}
-
-# 监听配置
-listeners:
-  - port: 8008
-    tls: false
-    type: http
-    x_forwarded: true
-    bind_addresses: ['0.0.0.0']
-    resources:
-      - names: [client, federation]
-        compress: false
-
-# 数据库配置
-database:
-  name: psycopg2
-  args:
-    user: synapse
-    password: ${POSTGRES_PASSWORD}
-    database: synapse
-    host: postgres
-    port: 5432
-    cp_min: 5
-    cp_max: 10
-
-# 日志配置
-log_config: "/config/log.config"
-
-# 媒体存储
-media_store_path: "/data/media_store"
-max_upload_size: "100M"
-max_image_pixels: "32M"
-
-# 注册配置
-enable_registration: true
-enable_registration_without_verification: true
-registration_requires_token: false
-allow_guest_access: false
-
-# 联邦配置
-federation_domain_whitelist: []
-federation_metrics_domains: []
-
-# 安全配置
-suppress_key_server_warning: true
-trusted_key_servers:
-  - server_name: "matrix.org"
-
-# 签名密钥
-signing_key_path: "/data/signing.key"
-
-# 应用服务
-app_service_config_files: []
-
-# 推送配置
-push:
-  include_content: true
-
-# 速率限制
-rc_message:
-  per_second: 0.2
-  burst_count: 10
-
-rc_registration:
-  per_second: 0.17
-  burst_count: 3
-
-rc_login:
-  address:
-    per_second: 0.17
-    burst_count: 3
-  account:
-    per_second: 0.17
-    burst_count: 3
-  failed_attempts:
-    per_second: 0.17
-    burst_count: 3
-
-# 其他配置
-report_stats: false
-macaroon_secret_key: "$(openssl rand -base64 32)"
-form_secret: "$(openssl rand -base64 32)"
-EOF
-
-    # 生成日志配置
-    cat > "$CONFIG_DIR/synapse/log.config" << EOF
-version: 1
-
-formatters:
-  precise:
-    format: '%(asctime)s - %(name)s - %(lineno)d - %(levelname)s - %(request)s - %(message)s'
-
-handlers:
-  file:
-    class: logging.handlers.TimedRotatingFileHandler
-    formatter: precise
-    filename: /data/homeserver.log
-    when: midnight
-    backupCount: 3
-    encoding: utf8
-
-  console:
-    class: logging.StreamHandler
-    formatter: precise
-
-loggers:
-    synapse.storage.SQL:
-        level: INFO
-
-root:
-    level: INFO
-    handlers: [file, console]
-
-disable_existing_loggers: false
-EOF
-
-    log_success "Synapse配置生成完成"
-}
-
-# 生成Element配置
-generate_element_config() {
-    log_info "生成Element Web配置..."
-
-    mkdir -p "$CONFIG_DIR/element"
-
-    cat > "$CONFIG_DIR/element/config.json" << EOF
-{
-    "default_server_config": {
-        "m.homeserver": {
-            "base_url": "https://${DOMAIN}",
-            "server_name": "${DOMAIN}"
-        },
-        "m.identity_server": {
-            "base_url": "https://vector.im"
-        }
-    },
-    "brand": "Element",
-    "integrations_ui_url": "https://scalar.vector.im/",
-    "integrations_rest_url": "https://scalar.vector.im/api",
-    "integrations_widgets_urls": [
-        "https://scalar.vector.im/_matrix/integrations/v1",
-        "https://scalar.vector.im/api",
-        "https://scalar-staging.vector.im/_matrix/integrations/v1",
-        "https://scalar-staging.vector.im/api",
-        "https://scalar-staging.riot.im/scalar/api"
-    ],
-    "hosting_signup_link": "https://element.io/matrix-services?utm_source=element-web&utm_medium=web",
-    "bug_report_endpoint_url": "https://element.io/bugreports/submit",
-    "uisi_autorageshake_app": "element-auto-uisi",
-    "showLabsSettings": true,
-    "piwik": false,
-    "roomDirectory": {
-        "servers": [
-            "${DOMAIN}",
-            "matrix.org"
-        ]
-    },
-    "enable_presence_by_hs_url": {
-        "https://matrix.org": false,
-        "https://matrix-client.matrix.org": false
-    },
-    "terms_and_conditions_links": [
-        {
-            "url": "https://element.io/privacy",
-            "text": "Privacy Policy"
-        },
-        {
-            "url": "https://element.io/terms-of-service",
-            "text": "Terms of Service"
-        }
-    ],
-    "hostSignup": {
-        "brand": "Element Home",
-        "cookiePolicyUrl": "https://element.io/cookie-policy",
-        "domains": [
-            "matrix.org"
-        ],
-        "privacyPolicyUrl": "https://element.io/privacy",
-        "termsOfServiceUrl": "https://element.io/terms-of-service",
-        "url": "https://ems.element.io/element-home/in-app-loader"
-    },
-    "sentry": {
-        "dsn": "https://029a0eb289f942508ae0fb17935bd8c5@sentry.matrix.org/6",
-        "environment": "develop"
-    },
-    "posthog": {
-        "projectApiKey": "phc_Jzsm6DTm6V2705zeU5dcNvQDlonOR68XvX2sh1sEOHO",
-        "apiHost": "https://posthog.element.io"
-    },
-    "features": {
-        "feature_spotlight": true,
-        "feature_video_rooms": true,
-        "feature_element_call_video_rooms": true,
-        "feature_group_calls": true
-    },
-    "element_call": {
-        "url": "https://call.element.io",
-        "use_exclusively": false,
-        "participant_limit": 8,
-        "brand": "Element Call"
-    },
-    "map_style_url": "https://api.maptiler.com/maps/streets/style.json?key=fU3vlMsMn4Jb6dnEIFsx"
-}
-EOF
-
-    log_success "Element Web配置生成完成"
-}
-
-# 生成Nginx配置
-generate_nginx_config() {
-    log_info "生成Nginx配置..."
-
-    mkdir -p "$CONFIG_DIR/nginx"
-
-    cat > "$CONFIG_DIR/nginx/nginx.conf" << EOF
-events {
-    worker_connections 1024;
-}
-
-http {
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-
-    # 日志格式
-    log_format main '\$remote_addr - \$remote_user [\$time_local] "\$request" '
-                    '\$status \$body_bytes_sent "\$http_referer" '
-                    '"\$http_user_agent" "\$http_x_forwarded_for"';
-
-    access_log /var/log/nginx/access.log main;
-    error_log /var/log/nginx/error.log;
-
-    # 基本设置
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-    client_max_body_size 100M;
-
-    # Gzip压缩
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_types text/plain text/css text/xml text/javascript application/javascript application/xml+rss application/json;
-
-    # HTTP重定向到HTTPS
-    server {
-        listen 80;
-        server_name ${DOMAIN} element.${DOMAIN};
-        
-        # Let's Encrypt验证
-        location /.well-known/acme-challenge/ {
-            root /var/www/certbot;
-        }
-        
-        # 重定向到HTTPS
-        location / {
-            return 301 https://\$server_name\$request_uri;
-        }
-    }
-
-    # Matrix服务器 (${DOMAIN})
-    server {
-        listen 443 ssl http2;
-        server_name ${DOMAIN};
-
-        # SSL配置
-        ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
-        ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES256-GCM-SHA384;
-        ssl_prefer_server_ciphers off;
-        ssl_session_cache shared:SSL:10m;
-        ssl_session_timeout 10m;
-
-        # 安全头
-        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-        add_header X-Content-Type-Options nosniff;
-        add_header X-Frame-Options DENY;
-        add_header X-XSS-Protection "1; mode=block";
-
-        # Matrix客户端API
-        location ~ ^(/_matrix|/_synapse/client) {
-            proxy_pass http://synapse:8008;
-            proxy_set_header X-Forwarded-For \$remote_addr;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-            proxy_set_header Host \$host;
-            proxy_buffering off;
-        }
-
-        # Matrix联邦API
-        location ~ ^(/_matrix/federation|/_matrix/key) {
-            proxy_pass http://synapse:8008;
-            proxy_set_header X-Forwarded-For \$remote_addr;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-            proxy_set_header Host \$host;
-            proxy_buffering off;
-        }
-
-        # 健康检查
-        location /health {
-            return 200 "OK";
-            add_header Content-Type text/plain;
-        }
-    }
-
-    # Element Web客户端 (element.${DOMAIN})
-    server {
-        listen 443 ssl http2;
-        server_name element.${DOMAIN};
-
-        # SSL配置
-        ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
-        ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES256-GCM-SHA384;
-        ssl_prefer_server_ciphers off;
-        ssl_session_cache shared:SSL:10m;
-        ssl_session_timeout 10m;
-
-        # 安全头
-        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-        add_header X-Content-Type-Options nosniff;
-        add_header X-Frame-Options SAMEORIGIN;
-        add_header X-XSS-Protection "1; mode=block";
-        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://${DOMAIN}; media-src 'self'; object-src 'none'; frame-src 'self'";
-
-        # Element Web
-        location / {
-            proxy_pass http://element:80;
-            proxy_set_header X-Forwarded-For \$remote_addr;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-            proxy_set_header Host \$host;
-            proxy_buffering off;
-        }
-    }
-}
-EOF
-
-    log_success "Nginx配置生成完成"
-}
-
-# 部署Matrix服务器
-deploy_matrix_server() {
-    log_header "部署Matrix服务器"
-
-    # 切换到配置目录
-    cd "$CONFIG_DIR"
-
-    # 生成Synapse签名密钥
-    if [[ ! -f "$CONFIG_DIR/synapse/signing.key" ]]; then
-        log_info "生成Synapse签名密钥..."
-        docker run --rm -v "$CONFIG_DIR/synapse:/data" matrixdotorg/synapse:latest generate
-    fi
-
-    # 启动服务
-    log_info "启动Matrix服务器..."
-    docker-compose up -d postgres
-
-    # 等待数据库启动
-    log_info "等待PostgreSQL启动..."
-    sleep 30
-
-    # 启动Synapse
-    docker-compose up -d synapse
-
-    # 等待Synapse启动
-    log_info "等待Synapse启动..."
-    sleep 30
-
-    # 启动Element Web
-    docker-compose up -d element
-
-    # 启动Nginx
-    docker-compose up -d nginx
-
-    log_success "Matrix服务器部署完成"
-}
-
-# 申请SSL证书
-setup_ssl_certificates() {
-    log_info "申请SSL证书..."
-
-    cd "$CONFIG_DIR"
-
-    # 首次申请证书
-    if [[ "$CERT_MODE" == "production" ]]; then
-        docker-compose run --rm certbot certonly --webroot --webroot-path=/var/www/certbot --email "$CERT_EMAIL" --agree-tos --no-eff-email -d "$DOMAIN" -d "element.$DOMAIN"
-    else
-        docker-compose run --rm certbot certonly --webroot --webroot-path=/var/www/certbot --email "$CERT_EMAIL" --agree-tos --no-eff-email --staging -d "$DOMAIN" -d "element.$DOMAIN"
-    fi
-
-    # 重启Nginx以加载证书
-    docker-compose restart nginx
-
-    log_success "SSL证书配置完成"
-}
-
-# 创建管理员用户
-create_admin_user() {
-    log_header "创建管理员用户"
-
-    echo -e "${CYAN}请输入管理员用户名:${NC}"
-    read -r admin_username
-
-    echo -e "${CYAN}请输入管理员密码:${NC}"
-    read -s admin_password
-
-    cd "$CONFIG_DIR"
-
-    # 创建管理员用户
-    docker-compose exec synapse register_new_matrix_user -u "$admin_username" -p "$admin_password" -a -c /config/homeserver.yaml http://localhost:8008
-
-    log_success "管理员用户创建完成"
-}
-
-# 验证部署
+# Enhanced deployment verification
 verify_deployment() {
-    log_info "验证部署状态..."
-
-    cd "$CONFIG_DIR"
-
-    # 检查服务状态
-    local failed_services=$(docker-compose ps --services --filter "status=exited")
-
-    if [[ -z "$failed_services" ]]; then
-        log_success "所有服务运行正常"
-    else
-        log_warning "以下服务状态异常: $failed_services"
-        docker-compose ps
+    print_title "Verifying Deployment"
+    
+    print_step "Checking pod status..."
+    local failed_pods=$(sudo k3s kubectl get pods -n "$NAMESPACE" --field-selector=status.phase!=Running,status.phase!=Succeeded -o name 2>/dev/null | wc -l)
+    
+    if [[ $failed_pods -gt 0 ]]; then
+        print_error "Some pods are not running:"
+        sudo k3s kubectl get pods -n "$NAMESPACE"
+        return 1
     fi
-
-    # 检查端口
-    if netstat -tuln | grep -q ":443"; then
-        log_success "HTTPS端口(443)正常监听"
-    else
-        log_warning "HTTPS端口(443)未监听"
-    fi
-
-    if netstat -tuln | grep -q ":80"; then
-        log_success "HTTP端口(80)正常监听"
-    else
-        log_warning "HTTP端口(80)未监听"
-    fi
-}
-
-# 显示访问信息
-show_access_information() {
-    log_header "访问信息"
-    echo -e "${CYAN}Matrix服务器:${NC} https://$DOMAIN"
-    echo -e "${CYAN}Element Web客户端:${NC} https://element.$DOMAIN"
-    echo ""
-    echo -e "${YELLOW}注意:${NC}"
-    echo "1. 请确保防火墙允许80和443端口的访问"
-    echo "2. 请确保域名DNS解析指向您的服务器IP"
-    echo "3. 证书可能需要几分钟时间完成申请和验证"
-    echo "4. 如果无法访问，请检查服务状态："
-    echo "   cd $CONFIG_DIR && docker-compose ps"
-    echo "   docker-compose logs"
-    echo ""
-}
-
-# 清理部署
-cleanup_deployment() {
-    log_header "清理部署环境"
-
-    echo -e "${YELLOW}警告: 此操作将删除所有Matrix相关的部署和数据!${NC}"
-    echo -e "${CYAN}确认要继续吗? (输入 'YES' 确认):${NC}"
-    read -r confirmation
-
-    if [[ "$confirmation" != "YES" ]]; then
-        log_info "操作已取消"
-        return 0
-    fi
-
-    log_info "开始清理部署..."
-
-    # 停止并删除容器
-    if [[ -f "$CONFIG_DIR/docker-compose.yml" ]]; then
-        cd "$CONFIG_DIR"
-        docker-compose down -v
-        docker-compose rm -f
-    fi
-
-    # 删除镜像
-    echo -e "${CYAN}是否删除Docker镜像? (y/n):${NC}"
-    read -r delete_images
-
-    if [[ "$delete_images" =~ ^[Yy]$ ]]; then
-        docker rmi matrixdotorg/synapse:latest vectorim/element-web:latest nginx:alpine postgres:15-alpine certbot/certbot:latest 2>/dev/null || true
-    fi
-
-    # 询问是否删除配置文件
-    echo -e "${CYAN}是否删除配置文件? (y/n):${NC}"
-    read -r delete_config
-
-    if [[ "$delete_config" =~ ^[Yy]$ ]]; then
-        if [[ -d "$CONFIG_DIR" ]]; then
-            log_info "删除配置目录: $CONFIG_DIR"
-            rm -rf "$CONFIG_DIR"
+    print_success "All pods are running ✓"
+    
+    print_step "Checking service endpoints..."
+    local services=("ess-synapse" "ess-element-web" "ess-matrix-authentication-service")
+    for service in "${services[@]}"; do
+        if sudo k3s kubectl get service "$service" -n "$NAMESPACE" &>/dev/null; then
+            print_success "Service $service: Available ✓"
+        else
+            print_warning "Service $service: Not found"
         fi
+    done
+    
+    print_step "Checking ingress configuration..."
+    if sudo k3s kubectl get ingress -n "$NAMESPACE" &>/dev/null; then
+        print_success "Ingress configuration: Available ✓"
+    else
+        print_warning "Ingress configuration: Not found"
     fi
-
-    log_success "清理完成!"
+    
+    print_step "Testing internal connectivity..."
+    # Test if Synapse is responding
+    if sudo k3s kubectl exec -n "$NAMESPACE" deployment/ess-synapse -- curl -s http://localhost:8008/health &>/dev/null; then
+        print_success "Synapse health check: OK ✓"
+    else
+        print_warning "Synapse health check: Failed"
+    fi
+    
+    print_success "Deployment verification completed"
 }
 
-# 显示服务状态
-show_service_status() {
-    log_header "服务状态"
-
-    if ! load_configuration; then
-        log_error "配置文件不存在"
-        return 0
-    fi
-
-    if [[ ! -f "$CONFIG_DIR/docker-compose.yml" ]]; then
-        log_error "Docker Compose配置不存在，可能尚未部署"
-        return 0
-    fi
-
-    cd "$CONFIG_DIR"
-
-    echo -e "${CYAN}=== 容器状态 ===${NC}"
-    docker-compose ps
-
-    echo -e "\n${CYAN}=== 服务日志 (最近20行) ===${NC}"
-    docker-compose logs --tail=20
-
-    echo -e "\n${CYAN}=== 系统资源使用 ===${NC}"
-    docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}"
+# Enhanced completion information
+show_completion_info() {
+    print_title "Deployment Completed Successfully!"
+    
+    print_success "ESS Community has been deployed successfully!"
+    echo
+    
+    print_info "Access Information:"
+    print_info "• Element Web Client: https://$WEB_DOMAIN"
+    print_info "• Server Name: $DOMAIN_NAME"
+    print_info "• Synapse Server: https://$SYNAPSE_DOMAIN"
+    print_info "• Authentication Service: https://$AUTH_DOMAIN"
+    print_info "• RTC Backend: https://$RTC_DOMAIN"
+    echo
+    
+    print_info "Administrative Information:"
+    print_info "• Installation Directory: $INSTALL_DIR"
+    print_info "• Configuration Files: $CONFIG_DIR"
+    print_info "• Kubernetes Namespace: $NAMESPACE"
+    print_info "• Log File: $LOG_FILE"
+    echo
+    
+    print_info "Useful Commands:"
+    print_info "• Check pod status: kubectl get pods -n $NAMESPACE"
+    print_info "• View logs: kubectl logs -n $NAMESPACE deployment/ess-synapse"
+    print_info "• Create user: kubectl exec -n $NAMESPACE -it deploy/ess-matrix-authentication-service -- mas-cli manage register-user"
+    print_info "• Backup database: kubectl exec -n $NAMESPACE deployment/ess-postgresql -- pg_dump -U synapse synapse > backup.sql"
+    echo
+    
+    print_info "Next Steps:"
+    print_info "1. Test federation: https://federationtester.matrix.org/"
+    print_info "2. Configure Element clients with server: $DOMAIN_NAME"
+    print_info "3. Set up monitoring and alerting"
+    print_info "4. Configure regular backups"
+    echo
+    
+    print_warning "Security Recommendations:"
+    print_info "• Regularly update ESS Community"
+    print_info "• Monitor system resources and logs"
+    print_info "• Implement proper backup strategy"
+    print_info "• Review and update security configurations"
+    echo
+    
+    # Create completion marker
+    echo "$(date -Iseconds)" > "${INSTALL_DIR}/.deployment-completed"
+    
+    print_success "Deployment information saved. Enjoy your Matrix server!"
 }
 
-# 主菜单
+# Cleanup environment function
+cleanup_environment() {
+    print_title "Environment Cleanup"
+    
+    print_warning "This will remove the entire ESS Community installation!"
+    print_warning "This action cannot be undone!"
+    echo
+    
+    read -p "Are you sure you want to proceed? (type 'yes' to confirm): " confirm
+    if [[ "$confirm" != "yes" ]]; then
+        print_info "Cleanup cancelled"
+        return 0
+    fi
+    
+    print_step "Creating final backup before cleanup..."
+    backup_configuration
+    backup_database
+    
+    print_step "Removing Helm deployment..."
+    helm uninstall ess -n "$NAMESPACE" || true
+    
+    print_step "Removing namespace..."
+    sudo k3s kubectl delete namespace "$NAMESPACE" || true
+    
+    print_step "Removing cert-manager..."
+    helm uninstall cert-manager -n cert-manager || true
+    sudo k3s kubectl delete namespace cert-manager || true
+    
+    print_step "Stopping K3s..."
+    sudo systemctl stop k3s || true
+    
+    read -p "Remove K3s completely? (y/N): " remove_k3s
+    if [[ "$remove_k3s" =~ ^[Yy]$ ]]; then
+        print_step "Uninstalling K3s..."
+        sudo /usr/local/bin/k3s-uninstall.sh || true
+    fi
+    
+    read -p "Remove installation directory? (y/N): " remove_dir
+    if [[ "$remove_dir" =~ ^[Yy]$ ]]; then
+        print_step "Removing installation directory..."
+        sudo rm -rf "$INSTALL_DIR"
+    fi
+    
+    print_success "Environment cleanup completed"
+}
+
+# Restart services function
+restart_services() {
+    print_title "Restarting Services"
+    
+    print_step "Restarting ESS Community deployment..."
+    sudo k3s kubectl rollout restart deployment -n "$NAMESPACE"
+    
+    print_step "Waiting for pods to be ready..."
+    sudo k3s kubectl rollout status deployment -n "$NAMESPACE" --timeout=300s
+    
+    print_success "Services restarted successfully"
+}
+
+# Enhanced main menu
 show_main_menu() {
-    clear
-    log_header "AIYA - Matrix服务器部署工具 (修复版)"
-    echo ""
-    echo "1) 配置部署参数"
-    echo "2) 开始部署"
-    echo "3) 查看当前配置"
-    echo "4) 查看服务状态"
-    echo "5) 创建管理员用户"
-    echo "6) 清理部署"
-    echo "0) 退出"
-    echo ""
-    echo -e "${CYAN}请选择操作 [0-6]:${NC}"
-}
-
-# 主函数
-main() {
-    # 检查系统要求
-    check_system_requirements || exit 1
-
-    # 检查依赖
-    check_dependencies || exit 1
-
-    # 如果有参数，直接执行自动部署
-    if [[ $# -gt 0 && "$1" == "auto" ]]; then
-        log_header "自动部署模式"
-
-        # 配置收集
-        collect_configuration
-
-        # 生成配置文件
-        generate_docker_compose
-        generate_synapse_config
-        generate_element_config
-        generate_nginx_config
-
-        # 部署Matrix服务器
-        deploy_matrix_server || exit 1
-
-        # 设置SSL证书
-        setup_ssl_certificates || exit 1
-
-        # 验证部署
-        verify_deployment
-
-        # 显示访问信息
-        show_access_information
-
-        log_success "AIYA Matrix服务器自动部署完成!"
-        return 0
-    fi
-
-    # 交互式菜单
     while true; do
-        show_main_menu
-        read -r choice
-
+        clear
+        print_title "ESS Community Management Menu"
+        print_info "Installation Directory: $INSTALL_DIR"
+        print_info "Namespace: $NAMESPACE"
+        print_info "Chart Version: $ESS_CHART_VERSION"
+        echo
+        
+        print_info "Available Options:"
+        print_info "1. View deployment status"
+        print_info "2. Create user account"
+        print_info "3. Backup configuration"
+        print_info "4. Backup database"
+        print_info "5. Restart services"
+        print_info "6. View logs"
+        print_info "7. Update deployment"
+        print_info "8. Cleanup environment"
+        print_info "9. Exit"
+        echo
+        
+        read -p "Select option (1-9): " choice
+        
         case $choice in
             1)
-                collect_configuration || true
+                sudo k3s kubectl get pods -n "$NAMESPACE"
+                echo
+                sudo k3s kubectl get services -n "$NAMESPACE"
+                echo
+                read -p "Press Enter to continue..."
                 ;;
             2)
-                if load_configuration; then
-                    generate_docker_compose
-                    generate_synapse_config
-                    generate_element_config
-                    generate_nginx_config
-                    deploy_matrix_server || continue
-                    setup_ssl_certificates || continue
-                    verify_deployment
-                    show_access_information
-                else
-                    log_error "请先配置部署参数"
-                fi
-                read -p "按回车键继续..."
+                create_initial_user
+                read -p "Press Enter to continue..."
                 ;;
             3)
-                if load_configuration; then
-                    show_configuration_summary
-                else
-                    log_error "配置文件不存在"
-                fi
-                read -p "按回车键继续..."
+                backup_configuration
+                read -p "Press Enter to continue..."
                 ;;
             4)
-                show_service_status
-                read -p "按回车键继续..."
+                backup_database
+                read -p "Press Enter to continue..."
                 ;;
             5)
-                if load_configuration; then
-                    create_admin_user
-                else
-                    log_error "请先完成部署"
-                fi
-                read -p "按回车键继续..."
+                restart_services
+                read -p "Press Enter to continue..."
                 ;;
             6)
-                cleanup_deployment
-                read -p "按回车键继续..."
+                print_info "Available deployments:"
+                sudo k3s kubectl get deployments -n "$NAMESPACE"
+                echo
+                read -p "Enter deployment name to view logs: " deployment
+                if [[ -n "$deployment" ]]; then
+                    sudo k3s kubectl logs -n "$NAMESPACE" deployment/"$deployment" --tail=50
+                fi
+                read -p "Press Enter to continue..."
                 ;;
-            0)
-                log_info "退出部署工具"
+            7)
+                print_warning "Update functionality not implemented yet"
+                read -p "Press Enter to continue..."
+                ;;
+            8)
+                cleanup_environment
+                if [[ ! -d "$INSTALL_DIR" ]]; then
+                    exit 0
+                fi
+                ;;
+            9)
+                print_info "Goodbye!"
                 exit 0
                 ;;
             *)
-                log_error "无效选择，请重新输入"
+                print_error "Invalid option. Please select 1-9."
                 sleep 2
                 ;;
         esac
     done
 }
 
-# 脚本入口
+# Main deployment function
+main_deployment() {
+    log "Starting ESS Community deployment - Script version $SCRIPT_VERSION"
+    
+    show_welcome
+    create_directories
+    check_system
+    configure_domains
+    check_network_requirements
+    configure_ports
+    configure_certificates
+    configure_installation
+    show_configuration_summary
+    save_configuration
+    install_dependencies
+    install_k3s
+    configure_k3s_ports
+    install_helm
+    create_namespace
+    install_cert_manager
+    configure_cloudflare_dns
+    generate_ess_config
+    deploy_ess
+    create_initial_user
+    verify_deployment
+    backup_configuration
+    show_completion_info
+    
+    log "ESS Community deployment completed successfully"
+}
+
+# Main function
+main() {
+    # Check if already deployed
+    if [[ -f "${INSTALL_DIR}/config/main.yaml" ]] && sudo k3s kubectl get namespace "$NAMESPACE" &>/dev/null; then
+        show_main_menu
+    else
+        main_deployment
+    fi
+}
+
+# Script entry point
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
