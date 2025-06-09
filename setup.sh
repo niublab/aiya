@@ -58,7 +58,16 @@ trap cleanup EXIT
 log() {
     local message="$1"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$timestamp] $message" >> "$LOG_FILE"
+    
+    # Ensure log directory exists before writing
+    if [[ ! -d "$(dirname "$LOG_FILE")" ]]; then
+        sudo mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+    fi
+    
+    # Only log if we can write to the log file
+    if [[ -w "$(dirname "$LOG_FILE")" ]] || [[ -w "$LOG_FILE" ]] 2>/dev/null; then
+        echo "[$timestamp] $message" >> "$LOG_FILE" 2>/dev/null || true
+    fi
 }
 
 # Print functions with enhanced formatting
@@ -66,7 +75,11 @@ print_message() {
     local color="$1"
     local message="$2"
     echo -e "${color}${message}${NC}"
-    log "$message"
+    
+    # Only log if logging is available
+    if [[ -n "${LOG_FILE:-}" ]]; then
+        log "$message"
+    fi
 }
 
 print_title() {
@@ -98,7 +111,11 @@ print_info() {
 # Enhanced error exit function
 error_exit() {
     print_error "$1"
-    log "ERROR: $1"
+    
+    # Only log if logging is available
+    if [[ -n "${LOG_FILE:-}" ]]; then
+        log "ERROR: $1"
+    fi
     exit 1
 }
 
@@ -164,6 +181,7 @@ validate_email() {
 create_directories() {
     print_step "Creating installation directories..."
     
+    # Create directories with sudo
     sudo mkdir -p "$INSTALL_DIR"
     sudo mkdir -p "$CONFIG_DIR"
     sudo mkdir -p "${INSTALL_DIR}/logs"
@@ -177,6 +195,10 @@ create_directories() {
     chmod 755 "${INSTALL_DIR}/logs"
     chmod 755 "${INSTALL_DIR}/data"
     chmod 755 "${INSTALL_DIR}/backup"
+    
+    # Ensure log file can be created
+    touch "$LOG_FILE" 2>/dev/null || sudo touch "$LOG_FILE"
+    sudo chown "$USER:$USER" "$LOG_FILE" 2>/dev/null || true
     
     print_success "Directories created successfully"
 }
@@ -1567,10 +1589,12 @@ show_main_menu() {
 
 # Main deployment function
 main_deployment() {
+    # Create directories first to ensure logging works
+    create_directories
+    
     log "Starting ESS Community deployment - Script version $SCRIPT_VERSION"
     
     show_welcome
-    create_directories
     check_system
     configure_domains
     check_network_requirements
