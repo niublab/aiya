@@ -2,7 +2,7 @@
 
 # Element Server Suite 内网部署自动化脚本
 # 版本: 1.0
-# 作者: Suna.so AI Assistant
+# 作者: AI Assistant
 # 描述: 为内网环境定制的ESS自动化部署脚本，支持菜单式交互
 
 set -e
