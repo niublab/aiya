@@ -5,7 +5,7 @@
 # 作者: AI Assistant
 # 描述: 支持菜单式交互
 
-set -e
+# 注意：不使用 set -e，因为需要处理某些命令的失败情况
 
 # 颜色定义
 RED='\033[0;31m'
@@ -389,28 +389,61 @@ deploy_matrix_stack() {
     log_header "开始部署Element Server Suite"
     
     # 检查Kubernetes集群
-    check_kubernetes_cluster
+    log_info "步骤1: 检查Kubernetes集群..."
+    if ! check_kubernetes_cluster; then
+        log_error "Kubernetes集群检查失败，部署终止"
+        log_info "提示: 您需要先安装Kubernetes集群或选择安装k3s才能继续部署"
+        read -p "按回车键返回主菜单..."
+        return 0
+    fi
     
     # 创建部署目录
-    create_deployment_directory
+    log_info "步骤2: 创建部署目录..."
+    if ! create_deployment_directory; then
+        log_error "创建部署目录失败，部署终止"
+        read -p "按回车键继续..."
+        return 0
+    fi
     
     # 安装cert-manager
-    install_cert_manager
+    log_info "步骤3: 安装cert-manager..."
+    if ! install_cert_manager; then
+        log_error "cert-manager安装失败，部署终止"
+        read -p "按回车键继续..."
+        return 0
+    fi
     
     # 配置证书颁发者
-    setup_certificate_issuers
+    log_info "步骤4: 配置证书颁发者..."
+    if ! setup_certificate_issuers; then
+        log_error "证书颁发者配置失败，部署终止"
+        read -p "按回车键继续..."
+        return 0
+    fi
     
     # 生成自定义values文件
-    generate_values_file
+    log_info "步骤5: 生成配置文件..."
+    if ! generate_values_file; then
+        log_error "配置文件生成失败，部署终止"
+        read -p "按回车键继续..."
+        return 0
+    fi
     
     # 部署Matrix Stack
-    deploy_helm_chart
+    log_info "步骤6: 部署Matrix Stack..."
+    if ! deploy_helm_chart; then
+        log_error "Matrix Stack部署失败，部署终止"
+        read -p "按回车键继续..."
+        return 0
+    fi
     
     # 配置防火墙和端口转发
-    configure_firewall_and_ports
+    log_info "步骤7: 配置网络..."
+    configure_firewall_and_ports || true  # 网络配置失败不应该终止部署
     
     # 验证部署
-    verify_deployment
+    log_info "步骤8: 验证部署..."
+    verify_deployment || true  # 验证失败不应该终止部署
     
     log_success "Element Server Suite部署完成!"
     show_access_information
@@ -424,14 +457,23 @@ check_kubernetes_cluster() {
     if ! kubectl cluster-info &>/dev/null; then
         log_error "无法连接到Kubernetes集群"
         log_info "请确保Kubernetes集群正在运行并且kubectl配置正确"
-        
+        echo ""
+        log_info "选项:"
+        log_info "  y - 自动安装k3s轻量级Kubernetes集群"
+        log_info "  n - 取消部署，手动配置Kubernetes集群"
+        echo ""
         echo -e "${CYAN}是否需要安装k3s? (y/n):${NC}"
         read -r install_k3s
         
         if [[ "$install_k3s" =~ ^[Yy]$ ]]; then
             install_k3s_cluster
+            if [[ $? -ne 0 ]]; then
+                log_error "k3s安装失败，无法继续部署"
+                return 1
+            fi
         else
-            log_error "需要Kubernetes集群才能继续部署"
+            log_warning "用户选择不安装k3s，部署取消"
+            log_info "您可以手动安装Kubernetes集群后重新运行部署"
             return 1
         fi
     fi
