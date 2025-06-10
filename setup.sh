@@ -1,22 +1,22 @@
 #!/bin/bash
 
-# Element Server Suite (ESS) Community Edition Deployment Script
-# Improved Version Based on Security and Best Practices Review
-# Version: 2.0
-# Compatible with ESS-Helm Chart 25.6.0
+# Element Server Suite (ESS) Community Edition 部署脚本
+# 中文版本 - 基于安全和最佳实践改进
+# 版本: 2.1
+# 兼容 ESS-Helm Chart 25.6.0
 
-# Strict error handling
+# 严格错误处理
 set -euo pipefail
 
-# Script configuration
-SCRIPT_VERSION="2.0"
+# 脚本配置
+SCRIPT_VERSION="2.1"
 ESS_CHART_VERSION="25.6.0"
 INSTALL_DIR="/opt/matrix"
 CONFIG_DIR="${INSTALL_DIR}/config"
 LOG_FILE="${INSTALL_DIR}/logs/setup.log"
 NAMESPACE="ess"
 
-# Color definitions for output
+# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -24,9 +24,9 @@ BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 WHITE='\033[1;37m'
-NC='\033[0m' # No Color
+NC='\033[0m' # 无颜色
 
-# Configuration variables
+# 配置变量
 DOMAIN_NAME=""
 SYNAPSE_DOMAIN=""
 AUTH_DOMAIN=""
@@ -37,46 +37,45 @@ ADMIN_EMAIL=""
 CLOUDFLARE_API_TOKEN=""
 CLOUDFLARE_ZONE_ID=""
 
-# Required ports
+# 必需端口
 REQUIRED_PORTS=(80 443 30881 30882)
 
-# Cleanup function for error handling
+# 错误处理清理函数
 cleanup() {
     local exit_code=$?
     if [[ $exit_code -ne 0 ]]; then
-        print_error "Script execution failed with exit code $exit_code"
-        print_info "Cleaning up temporary files..."
-        # Add cleanup logic here if needed
-        print_info "Check logs at: $LOG_FILE"
+        print_error "脚本执行失败，退出代码: $exit_code"
+        print_info "正在清理临时文件..."
+        print_info "请查看日志: $LOG_FILE"
     fi
 }
 
-# Set trap for cleanup
+# 设置清理陷阱
 trap cleanup EXIT
 
-# Enhanced logging function
+# 增强的日志函数
 log() {
     local message="$1"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
-    # Ensure log directory exists before writing
+    # 确保日志目录存在
     if [[ ! -d "$(dirname "$LOG_FILE")" ]]; then
-        sudo mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+        mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
     fi
     
-    # Only log if we can write to the log file
+    # 只有在可以写入日志文件时才记录
     if [[ -w "$(dirname "$LOG_FILE")" ]] || [[ -w "$LOG_FILE" ]] 2>/dev/null; then
         echo "[$timestamp] $message" >> "$LOG_FILE" 2>/dev/null || true
     fi
 }
 
-# Print functions with enhanced formatting
+# 增强格式的打印函数
 print_message() {
     local color="$1"
     local message="$2"
     echo -e "${color}${message}${NC}"
     
-    # Only log if logging is available
+    # 只有在日志可用时才记录
     if [[ -n "${LOG_FILE:-}" ]]; then
         log "$message"
     fi
@@ -108,18 +107,18 @@ print_info() {
     print_message "$WHITE" "ℹ $1"
 }
 
-# Enhanced error exit function
+# 增强的错误退出函数
 error_exit() {
     print_error "$1"
     
-    # Only log if logging is available
+    # 只有在日志可用时才记录
     if [[ -n "${LOG_FILE:-}" ]]; then
-        log "ERROR: $1"
+        log "错误: $1"
     fi
     exit 1
 }
 
-# Progress display function
+# 进度显示函数
 show_progress() {
     local current=$1
     local total=$2
@@ -131,7 +130,7 @@ show_progress() {
     fi
 }
 
-# Retry mechanism for network operations
+# 网络操作重试机制
 retry_command() {
     local cmd="$1"
     local max_attempts="${2:-3}"
@@ -144,17 +143,17 @@ retry_command() {
         fi
         
         if [[ $attempt -lt $max_attempts ]]; then
-            print_warning "Command failed, attempt $attempt/$max_attempts. Retrying in ${delay}s..."
+            print_warning "命令执行失败，第 $attempt/$max_attempts 次重试，${delay}秒后重试..."
             sleep "$delay"
         fi
         ((attempt++))
     done
     
-    print_error "Command failed after $max_attempts attempts: $cmd"
+    print_error "命令在 $max_attempts 次尝试后仍然失败: $cmd"
     return 1
 }
 
-# Enhanced command checking
+# 增强的命令检查
 check_command() {
     if ! command -v "$1" &> /dev/null; then
         return 1
@@ -162,158 +161,188 @@ check_command() {
     return 0
 }
 
-# Input validation functions
+# 输入验证函数
 validate_domain() {
     local domain="$1"
     if [[ ! "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$ ]]; then
-        error_exit "Invalid domain format: $domain"
+        error_exit "域名格式无效: $domain"
     fi
 }
 
 validate_email() {
     local email="$1"
     if [[ ! "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
-        error_exit "Invalid email format: $email"
+        error_exit "邮箱格式无效: $email"
     fi
 }
 
-# Enhanced directory creation with proper permissions
+# 增强的目录创建，具有适当权限
 create_directories() {
-    print_step "Creating installation directories..."
+    print_step "创建安装目录..."
     
-    # Create directories with sudo
-    sudo mkdir -p "$INSTALL_DIR"
-    sudo mkdir -p "$CONFIG_DIR"
-    sudo mkdir -p "${INSTALL_DIR}/logs"
-    sudo mkdir -p "${INSTALL_DIR}/data"
-    sudo mkdir -p "${INSTALL_DIR}/backup"
+    # 使用适当的权限创建目录
+    if [[ $EUID -eq 0 ]]; then
+        # root用户直接创建
+        mkdir -p "$INSTALL_DIR"
+        mkdir -p "$CONFIG_DIR"
+        mkdir -p "${INSTALL_DIR}/logs"
+        mkdir -p "${INSTALL_DIR}/data"
+        mkdir -p "${INSTALL_DIR}/backup"
+    else
+        # 非root用户使用sudo
+        sudo mkdir -p "$INSTALL_DIR"
+        sudo mkdir -p "$CONFIG_DIR"
+        sudo mkdir -p "${INSTALL_DIR}/logs"
+        sudo mkdir -p "${INSTALL_DIR}/data"
+        sudo mkdir -p "${INSTALL_DIR}/backup"
+    fi
     
-    # Set proper ownership and permissions
-    sudo chown -R "$USER:$USER" "$INSTALL_DIR"
-    chmod 755 "$INSTALL_DIR"
-    chmod 700 "$CONFIG_DIR"  # More restrictive for config files
-    chmod 755 "${INSTALL_DIR}/logs"
-    chmod 755 "${INSTALL_DIR}/data"
-    chmod 755 "${INSTALL_DIR}/backup"
+    # 设置适当的所有权和权限
+    if [[ $EUID -eq 0 ]]; then
+        # root用户设置权限
+        chmod 755 "$INSTALL_DIR"
+        chmod 700 "$CONFIG_DIR"  # 配置文件更严格的权限
+        chmod 755 "${INSTALL_DIR}/logs"
+        chmod 755 "${INSTALL_DIR}/data"
+        chmod 755 "${INSTALL_DIR}/backup"
+    else
+        # 非root用户使用sudo并设置用户所有权
+        sudo chown -R "$USER:$USER" "$INSTALL_DIR"
+        chmod 755 "$INSTALL_DIR"
+        chmod 700 "$CONFIG_DIR"
+        chmod 755 "${INSTALL_DIR}/logs"
+        chmod 755 "${INSTALL_DIR}/data"
+        chmod 755 "${INSTALL_DIR}/backup"
+    fi
     
-    # Ensure log file can be created
-    touch "$LOG_FILE" 2>/dev/null || sudo touch "$LOG_FILE"
-    sudo chown "$USER:$USER" "$LOG_FILE" 2>/dev/null || true
+    # 确保可以创建日志文件
+    touch "$LOG_FILE" 2>/dev/null || {
+        if [[ $EUID -eq 0 ]]; then
+            touch "$LOG_FILE"
+        else
+            sudo touch "$LOG_FILE"
+            sudo chown "$USER:$USER" "$LOG_FILE" 2>/dev/null || true
+        fi
+    }
     
-    print_success "Directories created successfully"
+    print_success "目录创建成功"
 }
 
-# Secure configuration file permissions
+# 安全配置文件权限
 secure_config_files() {
-    print_step "Setting secure permissions for configuration files..."
+    print_step "设置配置文件安全权限..."
     
     if [[ -d "$CONFIG_DIR" ]]; then
         find "$CONFIG_DIR" -name "*.yaml" -exec chmod 600 {} \;
-        find "$CONFIG_DIR" -name "*.yaml" -exec chown "$USER:$USER" {} \;
-        print_success "Configuration files secured"
+        if [[ $EUID -ne 0 ]]; then
+            find "$CONFIG_DIR" -name "*.yaml" -exec chown "$USER:$USER" {} \;
+        fi
+        print_success "配置文件权限设置完成"
     fi
 }
 
-# Welcome message with version info
+# 带版本信息的欢迎消息
 show_welcome() {
     clear
-    print_title "Element Server Suite Community Edition Deployment"
-    print_info "Script Version: $SCRIPT_VERSION"
-    print_info "Target ESS Chart Version: $ESS_CHART_VERSION"
-    print_info "Based on: https://github.com/element-hq/ess-helm"
+    print_title "Element Server Suite Community Edition 部署脚本"
+    print_info "脚本版本: $SCRIPT_VERSION"
+    print_info "目标 ESS Chart 版本: $ESS_CHART_VERSION"
+    print_info "基于项目: https://github.com/element-hq/ess-helm"
     echo
-    print_info "This script will deploy Element Server Suite Community Edition"
-    print_info "using Kubernetes (K3s) and Helm with enhanced security and best practices."
+    print_info "此脚本将使用 Kubernetes (K3s) 和 Helm 部署 Element Server Suite Community Edition"
+    print_info "采用增强的安全性和最佳实践。"
     echo
-    print_warning "Please ensure you have:"
-    print_info "  • A clean Debian-based system"
-    print_info "  • At least 2 CPU cores and 2GB RAM"
-    print_info "  • 5GB+ available disk space"
-    print_info "  • Domain names configured in DNS"
-    print_info "  • Email for Let's Encrypt certificates"
+    print_warning "请确保您具备以下条件:"
+    print_info "  • 干净的 Debian 系列系统"
+    print_info "  • 至少 2 CPU 核心和 2GB 内存"
+    print_info "  • 5GB+ 可用磁盘空间"
+    print_info "  • 在 DNS 中配置的域名"
+    print_info "  • Let's Encrypt 证书的邮箱"
     echo
     
-    read -p "Press Enter to continue or Ctrl+C to exit..."
+    read -p "按 Enter 继续或 Ctrl+C 退出..."
 }
 
-# Enhanced system requirements check
+# 增强的系统要求检查
 check_system() {
-    print_title "System Requirements Check"
+    print_title "系统要求检查"
     
-    # Check OS
+    # 检查操作系统
     if [[ ! -f /etc/debian_version ]]; then
-        error_exit "This script only supports Debian-based systems"
+        error_exit "此脚本仅支持 Debian 系列系统"
     fi
-    print_success "Operating system: Debian-based ✓"
+    print_success "操作系统: Debian 系列 ✓"
     
-    # Check user
+    # 检查用户（现在允许root）
     if [[ $EUID -eq 0 ]]; then
-        error_exit "Please do not run this script as root user"
+        print_warning "检测到 root 用户，将以 root 权限运行"
+        print_success "用户检查: root 用户 ✓"
+    else
+        print_success "用户检查: 非 root 用户 ✓"
+        
+        # 检查 sudo 权限
+        if ! sudo -n true 2>/dev/null; then
+            print_warning "需要 sudo 权限，请输入密码:"
+            sudo -v || error_exit "无法获取 sudo 权限"
+        fi
+        print_success "Sudo 权限: 可用 ✓"
     fi
-    print_success "User check: Non-root user ✓"
     
-    # Check sudo privileges
-    if ! sudo -n true 2>/dev/null; then
-        print_warning "Sudo privileges required. Please enter password:"
-        sudo -v || error_exit "Cannot obtain sudo privileges"
-    fi
-    print_success "Sudo privileges: Available ✓"
-    
-    # Check network connectivity
+    # 检查网络连接
     if ! ping -c 1 8.8.8.8 &> /dev/null; then
-        error_exit "Network connection failed. Please check network settings"
+        error_exit "网络连接失败，请检查网络设置"
     fi
-    print_success "Network connectivity: Available ✓"
+    print_success "网络连接: 可用 ✓"
     
-    # Check disk space (minimum 5GB)
+    # 检查磁盘空间（最少 5GB）
     local available_space=$(df / | awk 'NR==2 {print $4}')
     if [[ $available_space -lt 5242880 ]]; then  # 5GB in KB
-        error_exit "Insufficient disk space. At least 5GB available space required"
+        error_exit "磁盘空间不足，至少需要 5GB 可用空间"
     fi
-    print_success "Disk space: Sufficient ✓"
+    print_success "磁盘空间: 充足 ✓"
     
-    # Check memory (minimum 2GB)
+    # 检查内存（最少 2GB）
     local total_mem=$(free -m | awk 'NR==2{print $2}')
-    if [[ $total_mem -lt 1800 ]]; then  # Allow some margin
-        print_warning "System has less than 2GB RAM. Performance may be affected"
+    if [[ $total_mem -lt 1800 ]]; then  # 允许一些余量
+        print_warning "系统内存少于 2GB，性能可能受到影响"
     else
-        print_success "Memory: Sufficient ✓"
+        print_success "内存: 充足 ✓"
     fi
     
-    # Check CPU cores (minimum 2)
+    # 检查 CPU 核心（最少 2 个）
     local cpu_cores=$(nproc)
     if [[ $cpu_cores -lt 2 ]]; then
-        print_warning "System has less than 2 CPU cores. Performance may be affected"
+        print_warning "系统 CPU 核心少于 2 个，性能可能受到影响"
     else
-        print_success "CPU cores: Sufficient ✓"
+        print_success "CPU 核心: 充足 ✓"
     fi
 }
 
-# Network requirements check
+# 网络要求检查
 check_network_requirements() {
-    print_title "Network Requirements Check"
+    print_title "网络要求检查"
     
-    print_step "Checking port availability..."
+    print_step "检查端口可用性..."
     for port in "${REQUIRED_PORTS[@]}"; do
         if ss -tuln | grep -q ":$port "; then
-            error_exit "Port $port is already in use. Please free it before continuing"
+            error_exit "端口 $port 已被占用，请先释放后继续"
         fi
-        print_success "Port $port: Available ✓"
+        print_success "端口 $port: 可用 ✓"
     done
     
-    print_step "Checking DNS resolution..."
+    print_step "检查 DNS 解析..."
     if [[ -n "$DOMAIN_NAME" ]]; then
         if ! nslookup "$DOMAIN_NAME" &>/dev/null; then
-            print_warning "Domain $DOMAIN_NAME cannot be resolved. Please ensure DNS is configured correctly"
+            print_warning "域名 $DOMAIN_NAME 无法解析，请确保 DNS 配置正确"
         else
-            print_success "Domain resolution: $DOMAIN_NAME ✓"
+            print_success "域名解析: $DOMAIN_NAME ✓"
         fi
     fi
 }
 
-# Get public IP with multiple methods
+# 使用多种方法获取公网 IP
 get_public_ip() {
-    print_step "Detecting public IP address..."
+    print_step "检测公网 IP 地址..."
     
     local ip=""
     local methods=(
@@ -325,95 +354,95 @@ get_public_ip() {
     
     for method in "${methods[@]}"; do
         if ip=$(timeout 10 $method 2>/dev/null) && [[ -n "$ip" ]]; then
-            # Validate IP format
+            # 验证 IP 格式
             if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-                print_success "Public IP detected: $ip"
+                print_success "检测到公网 IP: $ip"
                 echo "$ip"
                 return 0
             fi
         fi
     done
     
-    print_warning "Could not detect public IP automatically"
+    print_warning "无法自动检测公网 IP"
     return 1
 }
 
-# Enhanced domain configuration with validation
+# 增强的域名配置，带验证
 configure_domains() {
-    print_title "Domain Configuration"
+    print_title "域名配置"
     
-    print_info "You need to configure 5 domain names for ESS Community:"
-    print_info "1. Server name (main domain)"
-    print_info "2. Synapse server"
-    print_info "3. Authentication service"
-    print_info "4. RTC backend"
-    print_info "5. Element Web client"
+    print_info "您需要为 ESS Community 配置 5 个域名:"
+    print_info "1. 服务器名称（主域名）"
+    print_info "2. Synapse 服务器"
+    print_info "3. 认证服务"
+    print_info "4. RTC 后端"
+    print_info "5. Element Web 客户端"
     echo
     
-    # Get public IP
+    # 获取公网 IP
     local public_ip
     if public_ip=$(get_public_ip); then
-        print_info "Please ensure all domains point to: $public_ip"
+        print_info "请确保所有域名都指向: $public_ip"
         echo
     fi
     
-    # Server name (main domain)
+    # 服务器名称（主域名）
     while [[ -z "$DOMAIN_NAME" ]]; do
-        read -p "Enter server name (e.g., matrix.example.com): " DOMAIN_NAME
+        read -p "输入服务器名称 (例如: matrix.example.com): " DOMAIN_NAME
         if [[ -n "$DOMAIN_NAME" ]]; then
             validate_domain "$DOMAIN_NAME"
         fi
     done
     
-    # Synapse domain
+    # Synapse 域名
     while [[ -z "$SYNAPSE_DOMAIN" ]]; do
-        read -p "Enter Synapse domain (e.g., synapse.example.com): " SYNAPSE_DOMAIN
+        read -p "输入 Synapse 域名 (例如: synapse.example.com): " SYNAPSE_DOMAIN
         if [[ -n "$SYNAPSE_DOMAIN" ]]; then
             validate_domain "$SYNAPSE_DOMAIN"
         fi
     done
     
-    # Authentication domain
+    # 认证域名
     while [[ -z "$AUTH_DOMAIN" ]]; do
-        read -p "Enter Authentication service domain (e.g., auth.example.com): " AUTH_DOMAIN
+        read -p "输入认证服务域名 (例如: auth.example.com): " AUTH_DOMAIN
         if [[ -n "$AUTH_DOMAIN" ]]; then
             validate_domain "$AUTH_DOMAIN"
         fi
     done
     
-    # RTC domain
+    # RTC 域名
     while [[ -z "$RTC_DOMAIN" ]]; do
-        read -p "Enter RTC backend domain (e.g., rtc.example.com): " RTC_DOMAIN
+        read -p "输入 RTC 后端域名 (例如: rtc.example.com): " RTC_DOMAIN
         if [[ -n "$RTC_DOMAIN" ]]; then
             validate_domain "$RTC_DOMAIN"
         fi
     done
     
-    # Web client domain
+    # Web 客户端域名
     while [[ -z "$WEB_DOMAIN" ]]; do
-        read -p "Enter Element Web domain (e.g., chat.example.com): " WEB_DOMAIN
+        read -p "输入 Element Web 域名 (例如: chat.example.com): " WEB_DOMAIN
         if [[ -n "$WEB_DOMAIN" ]]; then
             validate_domain "$WEB_DOMAIN"
         fi
     done
     
-    print_success "Domain configuration completed"
+    print_success "域名配置完成"
 }
 
-# Enhanced port configuration
+# 增强的端口配置
 configure_ports() {
-    print_title "Port Configuration"
+    print_title "端口配置"
     
-    print_info "ESS Community requires the following ports:"
-    print_info "• TCP 80: HTTP (redirects to HTTPS)"
+    print_info "ESS Community 需要以下端口:"
+    print_info "• TCP 80: HTTP (重定向到 HTTPS)"
     print_info "• TCP 443: HTTPS"
-    print_info "• TCP 30881: WebRTC TCP connections"
-    print_info "• UDP 30882: WebRTC UDP connections"
+    print_info "• TCP 30881: WebRTC TCP 连接"
+    print_info "• UDP 30882: WebRTC UDP 连接"
     echo
     
-    print_step "Generating port configuration..."
+    print_step "生成端口配置..."
     cat > "${CONFIG_DIR}/ports.yaml" << EOF
-# Port configuration for ESS Community
+# ESS Community 端口配置
 global:
   ports:
     http: 80
@@ -422,7 +451,7 @@ global:
       tcp: 30881
       udp: 30882
 
-# Service-specific port configurations
+# 服务特定端口配置
 services:
   traefik:
     ports:
@@ -440,23 +469,23 @@ services:
         udp: 30882
 EOF
     
-    print_success "Port configuration generated"
+    print_success "端口配置生成完成"
 }
 
-# Certificate configuration with enhanced options
+# 增强选项的证书配置
 configure_certificates() {
-    print_title "Certificate Configuration"
+    print_title "证书配置"
     
-    print_info "Choose certificate configuration method:"
-    print_info "1. Let's Encrypt (automatic, recommended)"
-    print_info "2. Existing wildcard certificate"
-    print_info "3. Individual certificates"
-    print_info "4. External reverse proxy (no TLS in cluster)"
+    print_info "选择证书配置方法:"
+    print_info "1. Let's Encrypt (自动，推荐)"
+    print_info "2. 现有通配符证书"
+    print_info "3. 单独证书"
+    print_info "4. 外部反向代理 (集群中无 TLS)"
     echo
     
     local cert_choice
     while [[ ! "$cert_choice" =~ ^[1-4]$ ]]; do
-        read -p "Select option (1-4): " cert_choice
+        read -p "选择选项 (1-4): " cert_choice
     done
     
     case $cert_choice in
@@ -475,19 +504,19 @@ configure_certificates() {
     esac
 }
 
-# Let's Encrypt configuration
+# Let's Encrypt 配置
 configure_letsencrypt() {
-    print_step "Configuring Let's Encrypt..."
+    print_step "配置 Let's Encrypt..."
     
     while [[ -z "$CERT_EMAIL" ]]; do
-        read -p "Enter email for Let's Encrypt certificates: " CERT_EMAIL
+        read -p "输入 Let's Encrypt 证书邮箱: " CERT_EMAIL
         if [[ -n "$CERT_EMAIL" ]]; then
             validate_email "$CERT_EMAIL"
         fi
     done
     
     cat > "${CONFIG_DIR}/tls.yaml" << EOF
-# Let's Encrypt TLS configuration
+# Let's Encrypt TLS 配置
 global:
   tls:
     mode: letsencrypt
@@ -495,7 +524,7 @@ global:
       email: "$CERT_EMAIL"
       server: https://acme-v02.api.letsencrypt.org/directory
       
-# Certificate issuer configuration
+# 证书颁发者配置
 certManager:
   enabled: true
   issuer:
@@ -503,21 +532,21 @@ certManager:
     email: "$CERT_EMAIL"
     server: https://acme-v02.api.letsencrypt.org/directory
     
-# Ingress TLS configuration
+# Ingress TLS 配置
 ingress:
   tls:
     enabled: true
     issuer: letsencrypt-prod
 EOF
     
-    print_success "Let's Encrypt configuration completed"
+    print_success "Let's Encrypt 配置完成"
 }
 
-# Wildcard certificate configuration
+# 通配符证书配置
 configure_wildcard_cert() {
-    print_step "Configuring wildcard certificate..."
+    print_step "配置通配符证书..."
     
-    print_info "Please ensure your wildcard certificate covers:"
+    print_info "请确保您的通配符证书覆盖:"
     print_info "• $DOMAIN_NAME"
     print_info "• $SYNAPSE_DOMAIN"
     print_info "• $AUTH_DOMAIN"
@@ -526,39 +555,44 @@ configure_wildcard_cert() {
     echo
     
     local cert_path key_path
-    read -p "Enter path to certificate file: " cert_path
-    read -p "Enter path to private key file: " key_path
+    read -p "输入证书文件路径: " cert_path
+    read -p "输入私钥文件路径: " key_path
     
     if [[ ! -f "$cert_path" ]] || [[ ! -f "$key_path" ]]; then
-        error_exit "Certificate or key file not found"
+        error_exit "证书或密钥文件未找到"
     fi
     
-    # Import certificate to Kubernetes
-    kubectl create secret tls ess-certificate -n "$NAMESPACE" \
-        --cert="$cert_path" --key="$key_path" || error_exit "Failed to import certificate"
+    # 将证书导入 Kubernetes
+    if [[ $EUID -eq 0 ]]; then
+        kubectl create secret tls ess-certificate -n "$NAMESPACE" \
+            --cert="$cert_path" --key="$key_path" || error_exit "导入证书失败"
+    else
+        sudo k3s kubectl create secret tls ess-certificate -n "$NAMESPACE" \
+            --cert="$cert_path" --key="$key_path" || error_exit "导入证书失败"
+    fi
     
     cat > "${CONFIG_DIR}/tls.yaml" << EOF
-# Wildcard certificate TLS configuration
+# 通配符证书 TLS 配置
 global:
   tls:
     mode: existing
     secretName: ess-certificate
     
-# Ingress TLS configuration
+# Ingress TLS 配置
 ingress:
   tls:
     enabled: true
     secretName: ess-certificate
 EOF
     
-    print_success "Wildcard certificate configuration completed"
+    print_success "通配符证书配置完成"
 }
 
-# Individual certificates configuration
+# 单独证书配置
 configure_individual_certs() {
-    print_step "Configuring individual certificates..."
+    print_step "配置单独证书..."
     
-    print_info "You need separate certificates for each domain"
+    print_info "您需要为每个域名单独的证书"
     
     local domains=("$WEB_DOMAIN" "$SYNAPSE_DOMAIN" "$AUTH_DOMAIN" "$RTC_DOMAIN" "$DOMAIN_NAME")
     local secrets=("ess-chat-certificate" "ess-matrix-certificate" "ess-auth-certificate" "ess-rtc-certificate" "ess-well-known-certificate")
@@ -567,27 +601,32 @@ configure_individual_certs() {
         local domain="${domains[$i]}"
         local secret="${secrets[$i]}"
         
-        print_step "Configuring certificate for $domain..."
+        print_step "为 $domain 配置证书..."
         
         local cert_path key_path
-        read -p "Enter path to certificate file for $domain: " cert_path
-        read -p "Enter path to private key file for $domain: " key_path
+        read -p "输入 $domain 的证书文件路径: " cert_path
+        read -p "输入 $domain 的私钥文件路径: " key_path
         
         if [[ ! -f "$cert_path" ]] || [[ ! -f "$key_path" ]]; then
-            error_exit "Certificate or key file not found for $domain"
+            error_exit "$domain 的证书或密钥文件未找到"
         fi
         
-        kubectl create secret tls "$secret" -n "$NAMESPACE" \
-            --cert="$cert_path" --key="$key_path" || error_exit "Failed to import certificate for $domain"
+        if [[ $EUID -eq 0 ]]; then
+            kubectl create secret tls "$secret" -n "$NAMESPACE" \
+                --cert="$cert_path" --key="$key_path" || error_exit "$domain 证书导入失败"
+        else
+            sudo k3s kubectl create secret tls "$secret" -n "$NAMESPACE" \
+                --cert="$cert_path" --key="$key_path" || error_exit "$domain 证书导入失败"
+        fi
     done
     
     cat > "${CONFIG_DIR}/tls.yaml" << EOF
-# Individual certificates TLS configuration
+# 单独证书 TLS 配置
 global:
   tls:
     mode: individual
     
-# Service-specific TLS configuration
+# 服务特定 TLS 配置
 services:
   elementWeb:
     tls:
@@ -606,23 +645,23 @@ services:
       secretName: ess-well-known-certificate
 EOF
     
-    print_success "Individual certificates configuration completed"
+    print_success "单独证书配置完成"
 }
 
-# External proxy configuration
+# 外部代理配置
 configure_external_proxy() {
-    print_step "Configuring for external reverse proxy..."
+    print_step "配置外部反向代理..."
     
-    print_info "External reverse proxy configuration selected"
-    print_info "TLS will be terminated at the reverse proxy level"
+    print_info "选择了外部反向代理配置"
+    print_info "TLS 将在反向代理级别终止"
     
     cat > "${CONFIG_DIR}/tls.yaml" << EOF
-# External reverse proxy TLS configuration
+# 外部反向代理 TLS 配置
 global:
   tls:
     mode: disabled
     
-# Ingress configuration for external proxy
+# 外部代理的 Ingress 配置
 ingress:
   tls:
     enabled: false
@@ -631,59 +670,59 @@ ingress:
     traefik.ingress.kubernetes.io/router.entrypoints: web
 EOF
     
-    print_success "External proxy configuration completed"
+    print_success "外部代理配置完成"
 }
 
-# Installation configuration
+# 安装配置
 configure_installation() {
-    print_title "Installation Configuration"
+    print_title "安装配置"
     
     while [[ -z "$ADMIN_EMAIL" ]]; do
-        read -p "Enter administrator email: " ADMIN_EMAIL
+        read -p "输入管理员邮箱: " ADMIN_EMAIL
         if [[ -n "$ADMIN_EMAIL" ]]; then
             validate_email "$ADMIN_EMAIL"
         fi
     done
     
-    print_success "Installation configuration completed"
+    print_success "安装配置完成"
 }
 
-# Configuration summary
+# 配置摘要
 show_configuration_summary() {
-    print_title "Configuration Summary"
+    print_title "配置摘要"
     
-    print_info "Installation Directory: $INSTALL_DIR"
-    print_info "Namespace: $NAMESPACE"
-    print_info "ESS Chart Version: $ESS_CHART_VERSION"
+    print_info "安装目录: $INSTALL_DIR"
+    print_info "命名空间: $NAMESPACE"
+    print_info "ESS Chart 版本: $ESS_CHART_VERSION"
     echo
-    print_info "Domain Configuration:"
-    print_info "  Server Name: $DOMAIN_NAME"
+    print_info "域名配置:"
+    print_info "  服务器名称: $DOMAIN_NAME"
     print_info "  Synapse: $SYNAPSE_DOMAIN"
-    print_info "  Authentication: $AUTH_DOMAIN"
-    print_info "  RTC Backend: $RTC_DOMAIN"
+    print_info "  认证服务: $AUTH_DOMAIN"
+    print_info "  RTC 后端: $RTC_DOMAIN"
     print_info "  Element Web: $WEB_DOMAIN"
     echo
-    print_info "Administrator Email: $ADMIN_EMAIL"
+    print_info "管理员邮箱: $ADMIN_EMAIL"
     if [[ -n "$CERT_EMAIL" ]]; then
-        print_info "Certificate Email: $CERT_EMAIL"
+        print_info "证书邮箱: $CERT_EMAIL"
     fi
     echo
     
-    read -p "Continue with this configuration? (y/N): " confirm
+    read -p "继续使用此配置? (y/N): " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        print_info "Configuration cancelled"
+        print_info "配置已取消"
         exit 0
     fi
 }
 
-# Save configuration to file
+# 保存配置到文件
 save_configuration() {
-    print_step "Saving configuration..."
+    print_step "保存配置..."
     
     cat > "${CONFIG_DIR}/main.yaml" << EOF
-# ESS Community Main Configuration
-# Generated on: $(date)
-# Script Version: $SCRIPT_VERSION
+# ESS Community 主配置
+# 生成时间: $(date)
+# 脚本版本: $SCRIPT_VERSION
 
 metadata:
   version: "$SCRIPT_VERSION"
@@ -710,15 +749,19 @@ network:
 EOF
     
     secure_config_files
-    print_success "Configuration saved to ${CONFIG_DIR}/main.yaml"
+    print_success "配置已保存到 ${CONFIG_DIR}/main.yaml"
 }
 
-# Enhanced dependency installation with retry
+# 增强的依赖安装，带重试
 install_dependencies() {
-    print_title "Installing Dependencies"
+    print_title "安装依赖"
     
-    print_step "Updating package lists..."
-    retry_command "sudo apt-get update" 3 5
+    print_step "更新软件包列表..."
+    if [[ $EUID -eq 0 ]]; then
+        retry_command "apt-get update" 3 5
+    else
+        retry_command "sudo apt-get update" 3 5
+    fi
     
     local packages=(
         "curl"
@@ -733,66 +776,86 @@ install_dependencies() {
         "jq"
     )
     
-    print_step "Installing required packages..."
+    print_step "安装必需软件包..."
     for package in "${packages[@]}"; do
         if ! dpkg -l | grep -q "^ii  $package "; then
-            print_step "Installing $package..."
-            retry_command "sudo apt-get install -y $package" 3 5
+            print_step "安装 $package..."
+            if [[ $EUID -eq 0 ]]; then
+                retry_command "apt-get install -y $package" 3 5
+            else
+                retry_command "sudo apt-get install -y $package" 3 5
+            fi
         else
-            print_success "$package already installed"
+            print_success "$package 已安装"
         fi
     done
     
-    print_success "Dependencies installation completed"
+    print_success "依赖安装完成"
 }
 
-# K3s installation with enhanced configuration
+# 增强配置的 K3s 安装
 install_k3s() {
-    print_title "Installing K3s"
+    print_title "安装 K3s"
     
     if check_command k3s; then
-        print_success "K3s already installed"
+        print_success "K3s 已安装"
         return 0
     fi
     
-    print_step "Installing K3s..."
+    print_step "安装 K3s..."
     local k3s_config="--default-local-storage-path=${INSTALL_DIR}/data/k3s-storage"
-    k3s_config+=" --disable=traefik"  # We'll configure Traefik separately
+    k3s_config+=" --disable=traefik"  # 我们将单独配置 Traefik
     
     retry_command "curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC=\"server ${k3s_config}\" sh -" 3 10
     
-    print_step "Configuring kubectl access..."
+    print_step "配置 kubectl 访问..."
     mkdir -p ~/.kube
     export KUBECONFIG=~/.kube/config
-    sudo k3s kubectl config view --raw > "$KUBECONFIG"
-    chmod 600 "$KUBECONFIG"
-    chown "$USER:$USER" "$KUBECONFIG"
     
-    # Add to bashrc for persistence
+    if [[ $EUID -eq 0 ]]; then
+        k3s kubectl config view --raw > "$KUBECONFIG"
+    else
+        sudo k3s kubectl config view --raw > "$KUBECONFIG"
+        chown "$USER:$USER" "$KUBECONFIG"
+    fi
+    chmod 600 "$KUBECONFIG"
+    
+    # 添加到 bashrc 以持久化
     if ! grep -q "export KUBECONFIG=~/.kube/config" ~/.bashrc; then
         echo "export KUBECONFIG=~/.kube/config" >> ~/.bashrc
     fi
     
-    print_step "Waiting for K3s to be ready..."
+    print_step "等待 K3s 就绪..."
     local retries=0
-    while ! sudo k3s kubectl get nodes &>/dev/null; do
+    while true; do
+        if [[ $EUID -eq 0 ]]; then
+            if k3s kubectl get nodes &>/dev/null; then
+                break
+            fi
+        else
+            if sudo k3s kubectl get nodes &>/dev/null; then
+                break
+            fi
+        fi
+        
         if [[ $retries -ge 30 ]]; then
-            error_exit "K3s startup timeout"
+            error_exit "K3s 启动超时"
         fi
         sleep 2
         ((retries++))
     done
     
-    print_success "K3s installation completed"
+    print_success "K3s 安装完成"
 }
 
-# Traefik configuration for custom ports
+# 自定义端口的 Traefik 配置
 configure_k3s_ports() {
-    print_title "Configuring K3s Networking"
+    print_title "配置 K3s 网络"
     
-    print_step "Installing Traefik with custom configuration..."
+    print_step "安装自定义配置的 Traefik..."
     
-    sudo tee /var/lib/rancher/k3s/server/manifests/traefik-config.yaml > /dev/null << EOF
+    if [[ $EUID -eq 0 ]]; then
+        tee /var/lib/rancher/k3s/server/manifests/traefik-config.yaml > /dev/null << EOF
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -821,69 +884,133 @@ spec:
       - "--entrypoints.webrtc-tcp.address=:30881/tcp"
       - "--entrypoints.webrtc-udp.address=:30882/udp"
 EOF
+    else
+        sudo tee /var/lib/rancher/k3s/server/manifests/traefik-config.yaml > /dev/null << EOF
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    ports:
+      web:
+        port: 8080
+        exposedPort: 80
+      websecure:
+        port: 8443
+        exposedPort: 443
+      webrtc-tcp:
+        port: 30881
+        exposedPort: 30881
+        protocol: TCP
+      webrtc-udp:
+        port: 30882
+        exposedPort: 30882
+        protocol: UDP
+    service:
+      type: LoadBalancer
+    additionalArguments:
+      - "--entrypoints.webrtc-tcp.address=:30881/tcp"
+      - "--entrypoints.webrtc-udp.address=:30882/udp"
+EOF
+    fi
     
-    print_step "Restarting K3s to apply Traefik configuration..."
-    sudo systemctl restart k3s
+    print_step "重启 K3s 以应用 Traefik 配置..."
+    if [[ $EUID -eq 0 ]]; then
+        systemctl restart k3s
+    else
+        sudo systemctl restart k3s
+    fi
     
-    # Wait for Traefik to be ready
-    print_step "Waiting for Traefik to be ready..."
+    # 等待 Traefik 就绪
+    print_step "等待 Traefik 就绪..."
     local retries=0
-    while ! sudo k3s kubectl get pods -n kube-system | grep traefik | grep -q Running; do
+    while true; do
+        local traefik_running
+        if [[ $EUID -eq 0 ]]; then
+            traefik_running=$(k3s kubectl get pods -n kube-system | grep traefik | grep -c Running || true)
+        else
+            traefik_running=$(sudo k3s kubectl get pods -n kube-system | grep traefik | grep -c Running || true)
+        fi
+        
+        if [[ $traefik_running -gt 0 ]]; then
+            break
+        fi
+        
         if [[ $retries -ge 60 ]]; then
-            error_exit "Traefik startup timeout"
+            error_exit "Traefik 启动超时"
         fi
         sleep 2
         ((retries++))
     done
     
-    print_success "Traefik configuration completed"
+    print_success "Traefik 配置完成"
 }
 
-# Helm installation
+# Helm 安装
 install_helm() {
-    print_title "Installing Helm"
+    print_title "安装 Helm"
     
     if check_command helm; then
-        print_success "Helm already installed"
+        print_success "Helm 已安装"
         return 0
     fi
     
-    print_step "Installing Helm..."
+    print_step "安装 Helm..."
     retry_command "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash" 3 10
     
-    print_success "Helm installation completed"
+    print_success "Helm 安装完成"
 }
 
-# Namespace creation
+# 命名空间创建
 create_namespace() {
-    print_title "Creating Kubernetes Namespace"
+    print_title "创建 Kubernetes 命名空间"
     
-    print_step "Creating namespace: $NAMESPACE"
-    if ! sudo k3s kubectl get namespace "$NAMESPACE" &>/dev/null; then
-        sudo k3s kubectl create namespace "$NAMESPACE"
-        print_success "Namespace '$NAMESPACE' created"
+    print_step "创建命名空间: $NAMESPACE"
+    local namespace_exists
+    if [[ $EUID -eq 0 ]]; then
+        namespace_exists=$(k3s kubectl get namespace "$NAMESPACE" 2>/dev/null || echo "not_found")
     else
-        print_success "Namespace '$NAMESPACE' already exists"
+        namespace_exists=$(sudo k3s kubectl get namespace "$NAMESPACE" 2>/dev/null || echo "not_found")
+    fi
+    
+    if [[ "$namespace_exists" == "not_found" ]]; then
+        if [[ $EUID -eq 0 ]]; then
+            k3s kubectl create namespace "$NAMESPACE"
+        else
+            sudo k3s kubectl create namespace "$NAMESPACE"
+        fi
+        print_success "命名空间 '$NAMESPACE' 已创建"
+    else
+        print_success "命名空间 '$NAMESPACE' 已存在"
     fi
 }
 
-# Cert-manager installation with enhanced configuration
+# 增强配置的 Cert-manager 安装
 install_cert_manager() {
-    print_title "Installing Cert-Manager"
+    print_title "安装 Cert-Manager"
     
-    # Check if cert-manager is already installed
-    if sudo k3s kubectl get namespace cert-manager &>/dev/null; then
-        print_success "Cert-manager already installed"
+    # 检查 cert-manager 是否已安装
+    local cert_manager_exists
+    if [[ $EUID -eq 0 ]]; then
+        cert_manager_exists=$(k3s kubectl get namespace cert-manager 2>/dev/null || echo "not_found")
+    else
+        cert_manager_exists=$(sudo k3s kubectl get namespace cert-manager 2>/dev/null || echo "not_found")
+    fi
+    
+    if [[ "$cert_manager_exists" != "not_found" ]]; then
+        print_success "Cert-manager 已安装"
         return 0
     fi
     
-    print_step "Adding Jetstack Helm repository..."
+    print_step "添加 Jetstack Helm 仓库..."
     retry_command "helm repo add jetstack https://charts.jetstack.io --force-update" 3 5
     
-    print_step "Updating Helm repositories..."
+    print_step "更新 Helm 仓库..."
     retry_command "helm repo update" 3 5
     
-    print_step "Installing cert-manager..."
+    print_step "安装 cert-manager..."
     retry_command "helm install cert-manager jetstack/cert-manager \
         --namespace cert-manager \
         --create-namespace \
@@ -892,10 +1019,11 @@ install_cert_manager() {
         --wait \
         --timeout=10m" 3 10
     
-    # Create ClusterIssuer for Let's Encrypt if using Let's Encrypt
+    # 如果使用 Let's Encrypt，创建 ClusterIssuer
     if [[ -n "$CERT_EMAIL" ]]; then
-        print_step "Creating Let's Encrypt ClusterIssuer..."
-        sudo k3s kubectl apply -f - <<EOF
+        print_step "创建 Let's Encrypt ClusterIssuer..."
+        if [[ $EUID -eq 0 ]]; then
+            k3s kubectl apply -f - <<EOF
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -911,40 +1039,65 @@ spec:
           ingress:
             class: traefik
 EOF
+        else
+            sudo k3s kubectl apply -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: $CERT_EMAIL
+    privateKeySecretRef:
+      name: letsencrypt-prod-private-key
+    solvers:
+      - http01:
+          ingress:
+            class: traefik
+EOF
+        fi
     fi
     
-    print_success "Cert-manager installation completed"
+    print_success "Cert-manager 安装完成"
 }
 
-# Cloudflare DNS configuration (optional)
+# Cloudflare DNS 配置（可选）
 configure_cloudflare_dns() {
-    print_title "Cloudflare DNS Configuration (Optional)"
+    print_title "Cloudflare DNS 配置（可选）"
     
-    print_info "Do you want to configure Cloudflare DNS validation for certificates?"
-    print_info "This is useful for wildcard certificates or when HTTP validation is not possible."
+    print_info "您想配置 Cloudflare DNS 验证证书吗？"
+    print_info "这对通配符证书或无法进行 HTTP 验证时很有用。"
     echo
     
-    read -p "Configure Cloudflare DNS? (y/N): " use_cloudflare
+    read -p "配置 Cloudflare DNS? (y/N): " use_cloudflare
     if [[ ! "$use_cloudflare" =~ ^[Yy]$ ]]; then
-        print_info "Skipping Cloudflare DNS configuration"
+        print_info "跳过 Cloudflare DNS 配置"
         return 0
     fi
     
-    read -p "Enter Cloudflare API Token: " CLOUDFLARE_API_TOKEN
-    read -p "Enter Cloudflare Zone ID: " CLOUDFLARE_ZONE_ID
+    read -p "输入 Cloudflare API Token: " CLOUDFLARE_API_TOKEN
+    read -p "输入 Cloudflare Zone ID: " CLOUDFLARE_ZONE_ID
     
     if [[ -z "$CLOUDFLARE_API_TOKEN" ]] || [[ -z "$CLOUDFLARE_ZONE_ID" ]]; then
-        print_warning "Cloudflare credentials not provided, skipping DNS configuration"
+        print_warning "未提供 Cloudflare 凭据，跳过 DNS 配置"
         return 0
     fi
     
-    # Create Cloudflare secret
-    sudo k3s kubectl create secret generic cloudflare-api-token-secret \
-        --from-literal=api-token="$CLOUDFLARE_API_TOKEN" \
-        -n cert-manager
+    # 创建 Cloudflare secret
+    if [[ $EUID -eq 0 ]]; then
+        k3s kubectl create secret generic cloudflare-api-token-secret \
+            --from-literal=api-token="$CLOUDFLARE_API_TOKEN" \
+            -n cert-manager
+    else
+        sudo k3s kubectl create secret generic cloudflare-api-token-secret \
+            --from-literal=api-token="$CLOUDFLARE_API_TOKEN" \
+            -n cert-manager
+    fi
     
-    # Create DNS ClusterIssuer
-    sudo k3s kubectl apply -f - <<EOF
+    # 创建 DNS ClusterIssuer
+    if [[ $EUID -eq 0 ]]; then
+        k3s kubectl apply -f - <<EOF
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -965,18 +1118,41 @@ spec:
           dnsZones:
             - "$DOMAIN_NAME"
 EOF
+    else
+        sudo k3s kubectl apply -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-dns-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: $CERT_EMAIL
+    privateKeySecretRef:
+      name: letsencrypt-dns-prod-private-key
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token-secret
+              key: api-token
+        selector:
+          dnsZones:
+            - "$DOMAIN_NAME"
+EOF
+    fi
     
-    print_success "Cloudflare DNS validation configured"
+    print_success "Cloudflare DNS 验证已配置"
 }
 
-# Generate enhanced ESS configuration
+# 生成增强的 ESS 配置
 generate_ess_config() {
-    print_title "Generating ESS Configuration Files"
+    print_title "生成 ESS 配置文件"
     
-    print_step "Generating hostname configuration..."
+    print_step "生成主机名配置..."
     cat > "${CONFIG_DIR}/hostnames.yaml" << EOF
-# ESS Community hostname configuration
-# Generated on: $(date)
+# ESS Community 主机名配置
+# 生成时间: $(date)
 
 global:
   hosts:
@@ -986,16 +1162,16 @@ global:
     matrixAuthenticationService: "$AUTH_DOMAIN"
     matrixRtcBackend: "$RTC_DOMAIN"
   
-  # Server configuration
+  # 服务器配置
   server:
     name: "$DOMAIN_NAME"
     
-  # Well-known delegation
+  # Well-known 委托
   wellKnown:
     enabled: true
     server: "$SYNAPSE_DOMAIN"
     
-# Deployment markers for tracking
+# 部署标记用于跟踪
 deploymentMarkers:
   enabled: true
   version: "$ESS_CHART_VERSION"
@@ -1003,14 +1179,14 @@ deploymentMarkers:
   deployedBy: "$USER"
 EOF
     
-    print_step "Generating resource configuration..."
+    print_step "生成资源配置..."
     cat > "${CONFIG_DIR}/resources.yaml" << EOF
-# Resource limits and requests configuration
-# Optimized for production deployment
+# 资源限制和请求配置
+# 为生产部署优化
 
 global:
   resources:
-    # Default resource settings
+    # 默认资源设置
     requests:
       memory: "256Mi"
       cpu: "100m"
@@ -1018,7 +1194,7 @@ global:
       memory: "1Gi"
       cpu: "1000m"
 
-# Service-specific resource configuration
+# 服务特定资源配置
 synapse:
   resources:
     requests:
@@ -1028,7 +1204,7 @@ synapse:
       memory: "4Gi"
       cpu: "2000m"
   
-  # Synapse-specific configuration
+  # Synapse 特定配置
   config:
     workers:
       enabled: true
@@ -1043,7 +1219,7 @@ postgresql:
       memory: "1Gi"
       cpu: "1000m"
   
-  # PostgreSQL configuration
+  # PostgreSQL 配置
   persistence:
     enabled: true
     size: 10Gi
@@ -1077,13 +1253,13 @@ elementWeb:
       cpu: "200m"
 EOF
     
-    print_step "Generating security configuration..."
+    print_step "生成安全配置..."
     cat > "${CONFIG_DIR}/security.yaml" << EOF
-# Security configuration for ESS Community
-# Implements security best practices
+# ESS Community 安全配置
+# 实施安全最佳实践
 
 global:
-  # Security context for all pods
+  # 所有 Pod 的安全上下文
   securityContext:
     runAsNonRoot: true
     runAsUser: 1000
@@ -1092,14 +1268,14 @@ global:
     seccompProfile:
       type: RuntimeDefault
   
-  # Pod security context
+  # Pod 安全上下文
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 1000
     runAsGroup: 1000
     fsGroup: 1000
   
-  # Container security context
+  # 容器安全上下文
   containerSecurityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true
@@ -1109,7 +1285,7 @@ global:
       drop:
         - ALL
 
-# Network policies
+# 网络策略
 networkPolicy:
   enabled: true
   ingress:
@@ -1117,23 +1293,23 @@ networkPolicy:
   egress:
     enabled: true
 
-# Pod disruption budgets
+# Pod 中断预算
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
-# Service mesh configuration (if using Istio)
+# 服务网格配置（如果使用 Istio）
 serviceMesh:
   enabled: false
   mtls:
     mode: STRICT
 EOF
     
-    print_step "Generating monitoring configuration..."
+    print_step "生成监控配置..."
     cat > "${CONFIG_DIR}/monitoring.yaml" << EOF
-# Monitoring and observability configuration
+# 监控和可观测性配置
 
-# Prometheus monitoring
+# Prometheus 监控
 monitoring:
   enabled: true
   serviceMonitor:
@@ -1141,13 +1317,13 @@ monitoring:
     interval: 30s
     scrapeTimeout: 10s
   
-  # Grafana dashboards
+  # Grafana 仪表板
   grafana:
     enabled: true
     dashboards:
       enabled: true
   
-  # Alerting rules
+  # 告警规则
   prometheusRule:
     enabled: true
     rules:
@@ -1157,23 +1333,23 @@ monitoring:
         labels:
           severity: critical
         annotations:
-          summary: "Synapse is down"
-          description: "Synapse has been down for more than 5 minutes"
+          summary: "Synapse 已停机"
+          description: "Synapse 已停机超过 5 分钟"
 
-# Logging configuration
+# 日志配置
 logging:
   enabled: true
   level: INFO
   
-  # Log aggregation
+  # 日志聚合
   fluentd:
     enabled: false
   
-  # Log retention
+  # 日志保留
   retention:
     days: 30
 
-# Health checks
+# 健康检查
 healthChecks:
   enabled: true
   livenessProbe:
@@ -1199,50 +1375,56 @@ healthChecks:
 EOF
     
     secure_config_files
-    print_success "ESS configuration files generated"
+    print_success "ESS 配置文件生成完成"
 }
 
-# Configuration validation
+# 配置验证
 validate_configuration() {
-    print_title "Validating Configuration"
+    print_title "验证配置"
     
-    print_step "Validating YAML syntax..."
+    print_step "验证 YAML 语法..."
     for config_file in "${CONFIG_DIR}"/*.yaml; do
         if [[ -f "$config_file" ]]; then
             if ! python3 -c "import yaml; yaml.safe_load(open('$config_file'))" 2>/dev/null; then
-                error_exit "Configuration file syntax error: $config_file"
+                error_exit "配置文件语法错误: $config_file"
             fi
-            print_success "$(basename "$config_file"): Valid ✓"
+            print_success "$(basename "$config_file"): 有效 ✓"
         fi
     done
     
-    print_step "Validating Kubernetes connectivity..."
-    if ! sudo k3s kubectl cluster-info &>/dev/null; then
-        error_exit "Kubernetes cluster is not accessible"
+    print_step "验证 Kubernetes 连接..."
+    if [[ $EUID -eq 0 ]]; then
+        if ! k3s kubectl cluster-info &>/dev/null; then
+            error_exit "Kubernetes 集群不可访问"
+        fi
+    else
+        if ! sudo k3s kubectl cluster-info &>/dev/null; then
+            error_exit "Kubernetes 集群不可访问"
+        fi
     fi
-    print_success "Kubernetes connectivity: OK ✓"
+    print_success "Kubernetes 连接: 正常 ✓"
     
-    print_step "Validating Helm repositories..."
+    print_step "验证 Helm 仓库..."
     if ! helm repo list | grep -q jetstack; then
-        print_warning "Jetstack repository not found, adding..."
+        print_warning "未找到 Jetstack 仓库，正在添加..."
         helm repo add jetstack https://charts.jetstack.io --force-update
     fi
-    print_success "Helm repositories: OK ✓"
+    print_success "Helm 仓库: 正常 ✓"
     
-    print_success "Configuration validation completed"
+    print_success "配置验证完成"
 }
 
-# Enhanced ESS deployment
+# 增强的 ESS 部署
 deploy_ess() {
-    print_title "Deploying ESS Community"
+    print_title "部署 ESS Community"
     
     validate_configuration
     
-    print_step "Deploying Matrix Stack with Helm..."
-    print_info "Chart Version: $ESS_CHART_VERSION"
-    print_info "Namespace: $NAMESPACE"
+    print_step "使用 Helm 部署 Matrix Stack..."
+    print_info "Chart 版本: $ESS_CHART_VERSION"
+    print_info "命名空间: $NAMESPACE"
     
-    # Prepare Helm command with all configuration files
+    # 准备包含所有配置文件的 Helm 命令
     local helm_cmd="helm upgrade --install --namespace \"$NAMESPACE\" ess"
     helm_cmd+=" oci://ghcr.io/element-hq/ess-helm/matrix-stack"
     helm_cmd+=" --version \"$ESS_CHART_VERSION\""
@@ -1255,71 +1437,88 @@ deploy_ess() {
     helm_cmd+=" --wait"
     helm_cmd+=" --timeout=20m"
     
-    # Execute deployment with retry
+    # 使用重试执行部署
     retry_command "$helm_cmd" 2 30
     
-    print_step "Waiting for all pods to be ready..."
+    print_step "等待所有 Pod 就绪..."
     local retries=0
     local max_retries=60
     
     while true; do
-        local pending_pods=$(sudo k3s kubectl get pods -n "$NAMESPACE" --field-selector=status.phase!=Running,status.phase!=Succeeded -o name 2>/dev/null | wc -l)
+        local pending_pods
+        if [[ $EUID -eq 0 ]]; then
+            pending_pods=$(k3s kubectl get pods -n "$NAMESPACE" --field-selector=status.phase!=Running,status.phase!=Succeeded -o name 2>/dev/null | wc -l)
+        else
+            pending_pods=$(sudo k3s kubectl get pods -n "$NAMESPACE" --field-selector=status.phase!=Running,status.phase!=Succeeded -o name 2>/dev/null | wc -l)
+        fi
         
         if [[ $pending_pods -eq 0 ]]; then
             break
         fi
         
         if [[ $retries -ge $max_retries ]]; then
-            print_error "Timeout waiting for pods to be ready"
-            sudo k3s kubectl get pods -n "$NAMESPACE"
-            error_exit "Deployment timeout"
+            print_error "等待 Pod 就绪超时"
+            if [[ $EUID -eq 0 ]]; then
+                k3s kubectl get pods -n "$NAMESPACE"
+            else
+                sudo k3s kubectl get pods -n "$NAMESPACE"
+            fi
+            error_exit "部署超时"
         fi
         
-        show_progress $retries $max_retries "Waiting for pods to be ready... ($pending_pods pending)"
+        show_progress $retries $max_retries "等待 Pod 就绪... ($pending_pods 个待处理)"
         sleep 5
         ((retries++))
     done
     
-    print_success "ESS Community deployment completed"
+    print_success "ESS Community 部署完成"
 }
 
-# Create initial user with enhanced options
+# 增强选项的创建初始用户
 create_initial_user() {
-    print_title "Creating Initial User"
+    print_title "创建初始用户"
     
-    print_info "ESS Community does not allow user registration by default."
-    print_info "You need to create an initial administrator user."
+    print_info "ESS Community 默认不允许用户注册。"
+    print_info "您需要创建一个初始管理员用户。"
     echo
     
-    read -p "Create initial user now? (Y/n): " create_user
+    read -p "现在创建初始用户? (Y/n): " create_user
     if [[ "$create_user" =~ ^[Nn]$ ]]; then
-        print_info "Skipping user creation. You can create users later using:"
-        print_info "kubectl exec -n $NAMESPACE -it deploy/ess-matrix-authentication-service -- mas-cli manage register-user"
+        print_info "跳过用户创建。您可以稍后使用以下命令创建用户:"
+        if [[ $EUID -eq 0 ]]; then
+            print_info "kubectl exec -n $NAMESPACE -it deploy/ess-matrix-authentication-service -- mas-cli manage register-user"
+        else
+            print_info "sudo k3s kubectl exec -n $NAMESPACE -it deploy/ess-matrix-authentication-service -- mas-cli manage register-user"
+        fi
         return 0
     fi
     
-    print_step "Creating initial user..."
-    print_info "Follow the prompts to create your administrator user:"
+    print_step "创建初始用户..."
+    print_info "按照提示创建您的管理员用户:"
     
-    # Interactive user creation
-    sudo k3s kubectl exec -n "$NAMESPACE" -it deploy/ess-matrix-authentication-service -- mas-cli manage register-user
+    # 交互式用户创建
+    if [[ $EUID -eq 0 ]]; then
+        k3s kubectl exec -n "$NAMESPACE" -it deploy/ess-matrix-authentication-service -- mas-cli manage register-user
+    else
+        sudo k3s kubectl exec -n "$NAMESPACE" -it deploy/ess-matrix-authentication-service -- mas-cli manage register-user
+    fi
     
-    print_success "Initial user creation completed"
+    print_success "初始用户创建完成"
 }
 
-# Backup functionality
+# 备份功能
 backup_configuration() {
-    print_title "Creating Configuration Backup"
+    print_title "创建配置备份"
     
     local backup_dir="${INSTALL_DIR}/backup/config-$(date +%Y%m%d-%H%M%S)"
-    print_step "Creating backup directory: $backup_dir"
+    print_step "创建备份目录: $backup_dir"
     
     mkdir -p "$backup_dir"
     cp -r "${CONFIG_DIR}"/* "$backup_dir/"
     
-    # Create backup metadata
+    # 创建备份元数据
     cat > "$backup_dir/backup-info.yaml" << EOF
-# Backup Information
+# 备份信息
 backupDate: "$(date -Iseconds)"
 scriptVersion: "$SCRIPT_VERSION"
 chartVersion: "$ESS_CHART_VERSION"
@@ -1332,242 +1531,333 @@ domains:
   elementWeb: "$WEB_DOMAIN"
 EOF
     
-    # Set secure permissions
+    # 设置安全权限
     chmod -R 600 "$backup_dir"
-    chown -R "$USER:$USER" "$backup_dir"
+    if [[ $EUID -ne 0 ]]; then
+        chown -R "$USER:$USER" "$backup_dir"
+    fi
     
-    print_success "Configuration backup created: $backup_dir"
+    print_success "配置备份已创建: $backup_dir"
 }
 
-# Database backup functionality
+# 数据库备份功能
 backup_database() {
-    print_title "Creating Database Backup"
+    print_title "创建数据库备份"
     
     local backup_file="${INSTALL_DIR}/backup/postgres-$(date +%Y%m%d-%H%M%S).sql"
-    print_step "Creating database backup: $backup_file"
+    print_step "创建数据库备份: $backup_file"
     
-    # Create database backup
-    if sudo k3s kubectl exec -n "$NAMESPACE" deployment/ess-postgresql -- pg_dump -U synapse synapse > "$backup_file"; then
-        chmod 600 "$backup_file"
-        chown "$USER:$USER" "$backup_file"
-        print_success "Database backup created: $backup_file"
+    # 创建数据库备份
+    local backup_success=false
+    if [[ $EUID -eq 0 ]]; then
+        if k3s kubectl exec -n "$NAMESPACE" deployment/ess-postgresql -- pg_dump -U synapse synapse > "$backup_file"; then
+            backup_success=true
+        fi
     else
-        print_error "Database backup failed"
+        if sudo k3s kubectl exec -n "$NAMESPACE" deployment/ess-postgresql -- pg_dump -U synapse synapse > "$backup_file"; then
+            backup_success=true
+        fi
+    fi
+    
+    if [[ "$backup_success" == "true" ]]; then
+        chmod 600 "$backup_file"
+        if [[ $EUID -ne 0 ]]; then
+            chown "$USER:$USER" "$backup_file"
+        fi
+        print_success "数据库备份已创建: $backup_file"
+    else
+        print_error "数据库备份失败"
         return 1
     fi
 }
 
-# Enhanced deployment verification
+# 增强的部署验证
 verify_deployment() {
-    print_title "Verifying Deployment"
+    print_title "验证部署"
     
-    print_step "Checking pod status..."
-    local failed_pods=$(sudo k3s kubectl get pods -n "$NAMESPACE" --field-selector=status.phase!=Running,status.phase!=Succeeded -o name 2>/dev/null | wc -l)
+    print_step "检查 Pod 状态..."
+    local failed_pods
+    if [[ $EUID -eq 0 ]]; then
+        failed_pods=$(k3s kubectl get pods -n "$NAMESPACE" --field-selector=status.phase!=Running,status.phase!=Succeeded -o name 2>/dev/null | wc -l)
+    else
+        failed_pods=$(sudo k3s kubectl get pods -n "$NAMESPACE" --field-selector=status.phase!=Running,status.phase!=Succeeded -o name 2>/dev/null | wc -l)
+    fi
     
     if [[ $failed_pods -gt 0 ]]; then
-        print_error "Some pods are not running:"
-        sudo k3s kubectl get pods -n "$NAMESPACE"
+        print_error "一些 Pod 未运行:"
+        if [[ $EUID -eq 0 ]]; then
+            k3s kubectl get pods -n "$NAMESPACE"
+        else
+            sudo k3s kubectl get pods -n "$NAMESPACE"
+        fi
         return 1
     fi
-    print_success "All pods are running ✓"
+    print_success "所有 Pod 正在运行 ✓"
     
-    print_step "Checking service endpoints..."
+    print_step "检查服务端点..."
     local services=("ess-synapse" "ess-element-web" "ess-matrix-authentication-service")
     for service in "${services[@]}"; do
-        if sudo k3s kubectl get service "$service" -n "$NAMESPACE" &>/dev/null; then
-            print_success "Service $service: Available ✓"
+        local service_exists
+        if [[ $EUID -eq 0 ]]; then
+            service_exists=$(k3s kubectl get service "$service" -n "$NAMESPACE" 2>/dev/null || echo "not_found")
         else
-            print_warning "Service $service: Not found"
+            service_exists=$(sudo k3s kubectl get service "$service" -n "$NAMESPACE" 2>/dev/null || echo "not_found")
+        fi
+        
+        if [[ "$service_exists" != "not_found" ]]; then
+            print_success "服务 $service: 可用 ✓"
+        else
+            print_warning "服务 $service: 未找到"
         fi
     done
     
-    print_step "Checking ingress configuration..."
-    if sudo k3s kubectl get ingress -n "$NAMESPACE" &>/dev/null; then
-        print_success "Ingress configuration: Available ✓"
+    print_step "检查 Ingress 配置..."
+    local ingress_exists
+    if [[ $EUID -eq 0 ]]; then
+        ingress_exists=$(k3s kubectl get ingress -n "$NAMESPACE" 2>/dev/null || echo "not_found")
     else
-        print_warning "Ingress configuration: Not found"
+        ingress_exists=$(sudo k3s kubectl get ingress -n "$NAMESPACE" 2>/dev/null || echo "not_found")
     fi
     
-    print_step "Testing internal connectivity..."
-    # Test if Synapse is responding
-    if sudo k3s kubectl exec -n "$NAMESPACE" deployment/ess-synapse -- curl -s http://localhost:8008/health &>/dev/null; then
-        print_success "Synapse health check: OK ✓"
+    if [[ "$ingress_exists" != "not_found" ]]; then
+        print_success "Ingress 配置: 可用 ✓"
     else
-        print_warning "Synapse health check: Failed"
+        print_warning "Ingress 配置: 未找到"
     fi
     
-    print_success "Deployment verification completed"
+    print_step "测试内部连接..."
+    # 测试 Synapse 是否响应
+    local synapse_health
+    if [[ $EUID -eq 0 ]]; then
+        synapse_health=$(k3s kubectl exec -n "$NAMESPACE" deployment/ess-synapse -- curl -s http://localhost:8008/health 2>/dev/null || echo "failed")
+    else
+        synapse_health=$(sudo k3s kubectl exec -n "$NAMESPACE" deployment/ess-synapse -- curl -s http://localhost:8008/health 2>/dev/null || echo "failed")
+    fi
+    
+    if [[ "$synapse_health" != "failed" ]]; then
+        print_success "Synapse 健康检查: 正常 ✓"
+    else
+        print_warning "Synapse 健康检查: 失败"
+    fi
+    
+    print_success "部署验证完成"
 }
 
-# Enhanced completion information
+# 增强的完成信息
 show_completion_info() {
-    print_title "Deployment Completed Successfully!"
+    print_title "部署成功完成！"
     
-    print_success "ESS Community has been deployed successfully!"
+    print_success "ESS Community 已成功部署！"
     echo
     
-    print_info "Access Information:"
-    print_info "• Element Web Client: https://$WEB_DOMAIN"
-    print_info "• Server Name: $DOMAIN_NAME"
-    print_info "• Synapse Server: https://$SYNAPSE_DOMAIN"
-    print_info "• Authentication Service: https://$AUTH_DOMAIN"
-    print_info "• RTC Backend: https://$RTC_DOMAIN"
+    print_info "访问信息:"
+    print_info "• Element Web 客户端: https://$WEB_DOMAIN"
+    print_info "• 服务器名称: $DOMAIN_NAME"
+    print_info "• Synapse 服务器: https://$SYNAPSE_DOMAIN"
+    print_info "• 认证服务: https://$AUTH_DOMAIN"
+    print_info "• RTC 后端: https://$RTC_DOMAIN"
     echo
     
-    print_info "Administrative Information:"
-    print_info "• Installation Directory: $INSTALL_DIR"
-    print_info "• Configuration Files: $CONFIG_DIR"
-    print_info "• Kubernetes Namespace: $NAMESPACE"
-    print_info "• Log File: $LOG_FILE"
+    print_info "管理信息:"
+    print_info "• 安装目录: $INSTALL_DIR"
+    print_info "• 配置文件: $CONFIG_DIR"
+    print_info "• Kubernetes 命名空间: $NAMESPACE"
+    print_info "• 日志文件: $LOG_FILE"
     echo
     
-    print_info "Useful Commands:"
-    print_info "• Check pod status: kubectl get pods -n $NAMESPACE"
-    print_info "• View logs: kubectl logs -n $NAMESPACE deployment/ess-synapse"
-    print_info "• Create user: kubectl exec -n $NAMESPACE -it deploy/ess-matrix-authentication-service -- mas-cli manage register-user"
-    print_info "• Backup database: kubectl exec -n $NAMESPACE deployment/ess-postgresql -- pg_dump -U synapse synapse > backup.sql"
+    print_info "有用的命令:"
+    if [[ $EUID -eq 0 ]]; then
+        print_info "• 检查 Pod 状态: kubectl get pods -n $NAMESPACE"
+        print_info "• 查看日志: kubectl logs -n $NAMESPACE deployment/ess-synapse"
+        print_info "• 创建用户: kubectl exec -n $NAMESPACE -it deploy/ess-matrix-authentication-service -- mas-cli manage register-user"
+        print_info "• 备份数据库: kubectl exec -n $NAMESPACE deployment/ess-postgresql -- pg_dump -U synapse synapse > backup.sql"
+    else
+        print_info "• 检查 Pod 状态: sudo k3s kubectl get pods -n $NAMESPACE"
+        print_info "• 查看日志: sudo k3s kubectl logs -n $NAMESPACE deployment/ess-synapse"
+        print_info "• 创建用户: sudo k3s kubectl exec -n $NAMESPACE -it deploy/ess-matrix-authentication-service -- mas-cli manage register-user"
+        print_info "• 备份数据库: sudo k3s kubectl exec -n $NAMESPACE deployment/ess-postgresql -- pg_dump -U synapse synapse > backup.sql"
+    fi
     echo
     
-    print_info "Next Steps:"
-    print_info "1. Test federation: https://federationtester.matrix.org/"
-    print_info "2. Configure Element clients with server: $DOMAIN_NAME"
-    print_info "3. Set up monitoring and alerting"
-    print_info "4. Configure regular backups"
+    print_info "下一步:"
+    print_info "1. 测试联邦: https://federationtester.matrix.org/"
+    print_info "2. 使用服务器配置 Element 客户端: $DOMAIN_NAME"
+    print_info "3. 设置监控和告警"
+    print_info "4. 配置定期备份"
     echo
     
-    print_warning "Security Recommendations:"
-    print_info "• Regularly update ESS Community"
-    print_info "• Monitor system resources and logs"
-    print_info "• Implement proper backup strategy"
-    print_info "• Review and update security configurations"
+    print_warning "安全建议:"
+    print_info "• 定期更新 ESS Community"
+    print_info "• 监控系统资源和日志"
+    print_info "• 实施适当的备份策略"
+    print_info "• 审查和更新安全配置"
     echo
     
-    # Create completion marker
+    # 创建完成标记
     echo "$(date -Iseconds)" > "${INSTALL_DIR}/.deployment-completed"
     
-    print_success "Deployment information saved. Enjoy your Matrix server!"
+    print_success "部署信息已保存。享受您的 Matrix 服务器！"
 }
 
-# Cleanup environment function
+# 环境清理函数
 cleanup_environment() {
-    print_title "Environment Cleanup"
+    print_title "环境清理"
     
-    print_warning "This will remove the entire ESS Community installation!"
-    print_warning "This action cannot be undone!"
+    print_warning "这将删除整个 ESS Community 安装！"
+    print_warning "此操作无法撤销！"
     echo
     
-    read -p "Are you sure you want to proceed? (type 'yes' to confirm): " confirm
+    read -p "您确定要继续吗？(输入 'yes' 确认): " confirm
     if [[ "$confirm" != "yes" ]]; then
-        print_info "Cleanup cancelled"
+        print_info "清理已取消"
         return 0
     fi
     
-    print_step "Creating final backup before cleanup..."
+    print_step "清理前创建最终备份..."
     backup_configuration
     backup_database
     
-    print_step "Removing Helm deployment..."
+    print_step "删除 Helm 部署..."
     helm uninstall ess -n "$NAMESPACE" || true
     
-    print_step "Removing namespace..."
-    sudo k3s kubectl delete namespace "$NAMESPACE" || true
+    print_step "删除命名空间..."
+    if [[ $EUID -eq 0 ]]; then
+        k3s kubectl delete namespace "$NAMESPACE" || true
+    else
+        sudo k3s kubectl delete namespace "$NAMESPACE" || true
+    fi
     
-    print_step "Removing cert-manager..."
+    print_step "删除 cert-manager..."
     helm uninstall cert-manager -n cert-manager || true
-    sudo k3s kubectl delete namespace cert-manager || true
+    if [[ $EUID -eq 0 ]]; then
+        k3s kubectl delete namespace cert-manager || true
+    else
+        sudo k3s kubectl delete namespace cert-manager || true
+    fi
     
-    print_step "Stopping K3s..."
-    sudo systemctl stop k3s || true
+    print_step "停止 K3s..."
+    if [[ $EUID -eq 0 ]]; then
+        systemctl stop k3s || true
+    else
+        sudo systemctl stop k3s || true
+    fi
     
-    read -p "Remove K3s completely? (y/N): " remove_k3s
+    read -p "完全删除 K3s? (y/N): " remove_k3s
     if [[ "$remove_k3s" =~ ^[Yy]$ ]]; then
-        print_step "Uninstalling K3s..."
-        sudo /usr/local/bin/k3s-uninstall.sh || true
+        print_step "卸载 K3s..."
+        if [[ $EUID -eq 0 ]]; then
+            /usr/local/bin/k3s-uninstall.sh || true
+        else
+            sudo /usr/local/bin/k3s-uninstall.sh || true
+        fi
     fi
     
-    read -p "Remove installation directory? (y/N): " remove_dir
+    read -p "删除安装目录? (y/N): " remove_dir
     if [[ "$remove_dir" =~ ^[Yy]$ ]]; then
-        print_step "Removing installation directory..."
-        sudo rm -rf "$INSTALL_DIR"
+        print_step "删除安装目录..."
+        if [[ $EUID -eq 0 ]]; then
+            rm -rf "$INSTALL_DIR"
+        else
+            sudo rm -rf "$INSTALL_DIR"
+        fi
     fi
     
-    print_success "Environment cleanup completed"
+    print_success "环境清理完成"
 }
 
-# Restart services function
+# 重启服务函数
 restart_services() {
-    print_title "Restarting Services"
+    print_title "重启服务"
     
-    print_step "Restarting ESS Community deployment..."
-    sudo k3s kubectl rollout restart deployment -n "$NAMESPACE"
+    print_step "重启 ESS Community 部署..."
+    if [[ $EUID -eq 0 ]]; then
+        k3s kubectl rollout restart deployment -n "$NAMESPACE"
+        print_step "等待 Pod 就绪..."
+        k3s kubectl rollout status deployment -n "$NAMESPACE" --timeout=300s
+    else
+        sudo k3s kubectl rollout restart deployment -n "$NAMESPACE"
+        print_step "等待 Pod 就绪..."
+        sudo k3s kubectl rollout status deployment -n "$NAMESPACE" --timeout=300s
+    fi
     
-    print_step "Waiting for pods to be ready..."
-    sudo k3s kubectl rollout status deployment -n "$NAMESPACE" --timeout=300s
-    
-    print_success "Services restarted successfully"
+    print_success "服务重启成功"
 }
 
-# Enhanced main menu
+# 增强的主菜单
 show_main_menu() {
     while true; do
         clear
-        print_title "ESS Community Management Menu"
-        print_info "Installation Directory: $INSTALL_DIR"
-        print_info "Namespace: $NAMESPACE"
-        print_info "Chart Version: $ESS_CHART_VERSION"
+        print_title "ESS Community 管理菜单"
+        print_info "安装目录: $INSTALL_DIR"
+        print_info "命名空间: $NAMESPACE"
+        print_info "Chart 版本: $ESS_CHART_VERSION"
         echo
         
-        print_info "Available Options:"
-        print_info "1. View deployment status"
-        print_info "2. Create user account"
-        print_info "3. Backup configuration"
-        print_info "4. Backup database"
-        print_info "5. Restart services"
-        print_info "6. View logs"
-        print_info "7. Update deployment"
-        print_info "8. Cleanup environment"
-        print_info "9. Exit"
+        print_info "可用选项:"
+        print_info "1. 查看部署状态"
+        print_info "2. 创建用户账户"
+        print_info "3. 备份配置"
+        print_info "4. 备份数据库"
+        print_info "5. 重启服务"
+        print_info "6. 查看日志"
+        print_info "7. 更新部署"
+        print_info "8. 清理环境"
+        print_info "9. 退出"
         echo
         
-        read -p "Select option (1-9): " choice
+        read -p "选择选项 (1-9): " choice
         
         case $choice in
             1)
-                sudo k3s kubectl get pods -n "$NAMESPACE"
+                if [[ $EUID -eq 0 ]]; then
+                    k3s kubectl get pods -n "$NAMESPACE"
+                    echo
+                    k3s kubectl get services -n "$NAMESPACE"
+                else
+                    sudo k3s kubectl get pods -n "$NAMESPACE"
+                    echo
+                    sudo k3s kubectl get services -n "$NAMESPACE"
+                fi
                 echo
-                sudo k3s kubectl get services -n "$NAMESPACE"
-                echo
-                read -p "Press Enter to continue..."
+                read -p "按 Enter 继续..."
                 ;;
             2)
                 create_initial_user
-                read -p "Press Enter to continue..."
+                read -p "按 Enter 继续..."
                 ;;
             3)
                 backup_configuration
-                read -p "Press Enter to continue..."
+                read -p "按 Enter 继续..."
                 ;;
             4)
                 backup_database
-                read -p "Press Enter to continue..."
+                read -p "按 Enter 继续..."
                 ;;
             5)
                 restart_services
-                read -p "Press Enter to continue..."
+                read -p "按 Enter 继续..."
                 ;;
             6)
-                print_info "Available deployments:"
-                sudo k3s kubectl get deployments -n "$NAMESPACE"
-                echo
-                read -p "Enter deployment name to view logs: " deployment
-                if [[ -n "$deployment" ]]; then
-                    sudo k3s kubectl logs -n "$NAMESPACE" deployment/"$deployment" --tail=50
+                print_info "可用的部署:"
+                if [[ $EUID -eq 0 ]]; then
+                    k3s kubectl get deployments -n "$NAMESPACE"
+                else
+                    sudo k3s kubectl get deployments -n "$NAMESPACE"
                 fi
-                read -p "Press Enter to continue..."
+                echo
+                read -p "输入部署名称以查看日志: " deployment
+                if [[ -n "$deployment" ]]; then
+                    if [[ $EUID -eq 0 ]]; then
+                        k3s kubectl logs -n "$NAMESPACE" deployment/"$deployment" --tail=50
+                    else
+                        sudo k3s kubectl logs -n "$NAMESPACE" deployment/"$deployment" --tail=50
+                    fi
+                fi
+                read -p "按 Enter 继续..."
                 ;;
             7)
-                print_warning "Update functionality not implemented yet"
-                read -p "Press Enter to continue..."
+                print_warning "更新功能尚未实现"
+                read -p "按 Enter 继续..."
                 ;;
             8)
                 cleanup_environment
@@ -1576,23 +1866,23 @@ show_main_menu() {
                 fi
                 ;;
             9)
-                print_info "Goodbye!"
+                print_info "再见！"
                 exit 0
                 ;;
             *)
-                print_error "Invalid option. Please select 1-9."
+                print_error "无效选项。请选择 1-9。"
                 sleep 2
                 ;;
         esac
     done
 }
 
-# Main deployment function
+# 主部署函数
 main_deployment() {
-    # Create directories first to ensure logging works
+    # 首先创建目录以确保日志工作
     create_directories
     
-    log "Starting ESS Community deployment - Script version $SCRIPT_VERSION"
+    log "开始 ESS Community 部署 - 脚本版本 $SCRIPT_VERSION"
     
     show_welcome
     check_system
@@ -1617,20 +1907,31 @@ main_deployment() {
     backup_configuration
     show_completion_info
     
-    log "ESS Community deployment completed successfully"
+    log "ESS Community 部署成功完成"
 }
 
-# Main function
+# 主函数
 main() {
-    # Check if already deployed
-    if [[ -f "${INSTALL_DIR}/config/main.yaml" ]] && sudo k3s kubectl get namespace "$NAMESPACE" &>/dev/null; then
-        show_main_menu
+    # 检查是否已部署
+    if [[ -f "${INSTALL_DIR}/config/main.yaml" ]]; then
+        local namespace_exists
+        if [[ $EUID -eq 0 ]]; then
+            namespace_exists=$(k3s kubectl get namespace "$NAMESPACE" 2>/dev/null || echo "not_found")
+        else
+            namespace_exists=$(sudo k3s kubectl get namespace "$NAMESPACE" 2>/dev/null || echo "not_found")
+        fi
+        
+        if [[ "$namespace_exists" != "not_found" ]]; then
+            show_main_menu
+        else
+            main_deployment
+        fi
     else
         main_deployment
     fi
 }
 
-# Script entry point
+# 脚本入口点
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
