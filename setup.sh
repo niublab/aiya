@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.1.0"
+readonly SCRIPT_VERSION="2.1.1"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1824,19 +1824,19 @@ EOF
 }
 
 fix_wellknown_configuration() {
-    print_step "修复Well-known配置"
+    print_step "修复Well-known配置（添加自定义端口）"
 
     local namespace="ess"
 
-    # 等待Well-known服务启动
-    print_info "等待Well-known服务启动..."
+    # 等待Well-known ConfigMap创建（ESS自动生成）
+    print_info "等待ESS生成Well-known配置..."
     local retry_count=0
     while ! k3s kubectl get configmap ess-well-known-haproxy -n "$namespace" &> /dev/null; do
-        if [ $retry_count -ge 30 ]; then
-            print_warning "Well-known ConfigMap未找到，跳过Well-known配置修复"
+        if [ $retry_count -ge 12 ]; then  # 减少等待时间到2分钟
+            print_warning "Well-known ConfigMap未找到，跳过配置修复"
             return 1
         fi
-        print_info "等待Well-known ConfigMap创建... ($((retry_count + 1))/30)"
+        print_info "等待ESS生成Well-known ConfigMap... ($((retry_count + 1))/12)"
         sleep 10
         ((retry_count++))
     done
@@ -1880,20 +1880,19 @@ fix_wellknown_configuration() {
     # 等待服务重启
     sleep 30
 
-    # 验证修复结果
+    # 快速验证修复结果
     print_info "验证Well-known配置修复..."
-    local retry_count=0
-    while [ $retry_count -lt 6 ]; do
-        if curl -s --connect-timeout 5 "https://$SERVER_NAME:$HTTPS_PORT/.well-known/matrix/client" | grep -q ":$HTTPS_PORT"; then
-            print_success "Well-known配置修复完成，端口号已正确添加"
-            return 0
-        fi
-        print_info "等待Well-known配置生效... ($((retry_count + 1))/6)"
-        sleep 10
-        ((retry_count++))
-    done
+    sleep 10  # 等待配置生效
 
-    print_warning "Well-known配置修复可能未完全生效，但配置已更新"
+    # 检查ConfigMap是否已更新
+    local updated_config=$(k3s kubectl get configmap ess-well-known-haproxy -n "$namespace" -o jsonpath='{.data.client}' 2>/dev/null || echo "")
+    if echo "$updated_config" | grep -q ":$HTTPS_PORT"; then
+        print_success "Well-known配置修复完成，自定义端口已添加"
+        print_info "Element Web现在应该能自动检测homeserver"
+    else
+        print_warning "Well-known配置可能未完全更新，但继续部署"
+    fi
+
     return 0
 }
 
@@ -2517,6 +2516,9 @@ full_deployment() {
     verify_ess_chart
     generate_ess_values
     deploy_ess
+
+    # ESS部署完成后，立即修复配置
+    print_info "ESS部署完成，开始修复配置..."
 
     # 修复MAS配置（添加端口号）
     if ! fix_mas_configuration; then
