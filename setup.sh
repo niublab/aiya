@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="1.2.4"
+readonly SCRIPT_VERSION="1.2.5"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1469,8 +1469,8 @@ deploy_ess() {
             break
         fi
 
-        if [ $retry_count -ge 180 ]; then
-            print_error "服务启动超时"
+        if [ $retry_count -ge 60 ]; then  # 减少到10分钟
+            print_error "服务启动超时 (10分钟)"
             print_info "检查Pod状态:"
             k3s kubectl get pods -n "$namespace"
             print_info "检查事件:"
@@ -1478,7 +1478,7 @@ deploy_ess() {
             return 1
         fi
 
-        print_info "等待服务启动... ($running_pods/$total_pods) ($((retry_count + 1))/180)"
+        print_info "等待服务启动... ($running_pods/$total_pods) ($((retry_count + 1))/60)"
         sleep 10
         ((retry_count++))
     done
@@ -1487,9 +1487,22 @@ deploy_ess() {
     print_info "等待关键服务就绪..."
     local services=("postgresql" "synapse" "matrix-authentication-service")
     for service in "${services[@]}"; do
-        print_info "等待 $service 就绪..."
-        if ! k3s kubectl wait --for=condition=ready pod -l app.kubernetes.io/name="$service" -n "$namespace" --timeout=300s; then
-            print_warning "$service 可能未完全就绪，继续检查其他服务"
+        print_info "检查 $service 状态..."
+
+        # 检查Pod是否存在
+        local pod_count=$(k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name="$service" --no-headers 2>/dev/null | wc -l)
+        if [ "$pod_count" -eq 0 ]; then
+            print_warning "$service Pod不存在，跳过"
+            continue
+        fi
+
+        # 等待Pod就绪，但时间更短
+        if k3s kubectl wait --for=condition=ready pod -l app.kubernetes.io/name="$service" -n "$namespace" --timeout=120s 2>/dev/null; then
+            print_success "$service 已就绪"
+        else
+            print_warning "$service 未在2分钟内就绪，但继续部署"
+            # 显示Pod状态用于调试
+            k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name="$service" 2>/dev/null || true
         fi
     done
 
@@ -1504,16 +1517,18 @@ create_admin_user() {
     # 等待MAS Pod就绪
     print_info "等待Matrix Authentication Service就绪..."
     local retry_count=0
+    local mas_pod=""
+
     while true; do
-        local mas_pod=$(k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name=matrix-authentication-service --no-headers 2>/dev/null | grep "Running" | head -n1 | awk '{print $1}')
+        mas_pod=$(k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name=matrix-authentication-service --no-headers 2>/dev/null | grep "Running" | head -n1 | awk '{print $1}')
 
         if [[ -n "$mas_pod" ]]; then
-            print_success "找到MAS Pod: $mas_pod"
+            print_success "找到运行中的MAS Pod: $mas_pod"
             break
         fi
 
-        if [ $retry_count -ge 60 ]; then
-            print_error "等待MAS Pod超时"
+        if [ $retry_count -ge 30 ]; then  # 减少到5分钟
+            print_error "等待MAS Pod超时 (5分钟)"
             print_info "当前Pod状态:"
             k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name=matrix-authentication-service
             print_warning "MAS Pod未就绪，跳过用户创建"
@@ -1521,39 +1536,84 @@ create_admin_user() {
             return 1
         fi
 
-        print_info "等待MAS Pod启动... ($((retry_count + 1))/60)"
-        sleep 5
+        print_info "等待MAS Pod启动... ($((retry_count + 1))/30)"
+        sleep 10
         ((retry_count++))
     done
 
-    # 等待MAS服务完全启动
-    print_info "等待MAS服务完全启动..."
-    sleep 30
+    # 等待MAS服务内部就绪
+    print_info "等待MAS服务内部就绪..."
+    retry_count=0
+    while true; do
+        # 检查MAS是否真正就绪 - 尝试执行一个简单命令
+        if k3s kubectl exec -n "$namespace" "$mas_pod" -- mas-cli --version &> /dev/null; then
+            print_success "MAS服务已就绪"
+            break
+        fi
+
+        if [ $retry_count -ge 12 ]; then  # 2分钟
+            print_warning "MAS服务内部检查超时，尝试创建用户"
+            break
+        fi
+
+        print_info "等待MAS服务内部就绪... ($((retry_count + 1))/12)"
+        sleep 10
+        ((retry_count++))
+    done
 
     # 创建管理员用户
     print_info "在MAS中创建管理员用户..."
     print_info "用户名: $ADMIN_USERNAME"
     print_info "密码: $ADMIN_PASSWORD"
 
-    # 使用非交互式方式创建用户
+    # 尝试多种创建方式
+    local user_created=false
+
+    # 方法1: 使用--yes参数
+    print_info "尝试方法1: 使用--yes参数..."
     if k3s kubectl exec -n "$namespace" "$mas_pod" -- \
         mas-cli manage register-user \
         --yes \
         --username "$ADMIN_USERNAME" \
         --password "$ADMIN_PASSWORD" \
-        --admin; then
-        print_success "管理员用户创建完成"
-    else
-        print_warning "自动创建用户失败，尝试交互式创建..."
+        --admin 2>/dev/null; then
+        print_success "管理员用户创建完成 (方法1)"
+        user_created=true
+    fi
+
+    # 方法2: 不使用--yes参数
+    if [ "$user_created" = false ]; then
+        print_info "尝试方法2: 不使用--yes参数..."
+        if k3s kubectl exec -n "$namespace" "$mas_pod" -- \
+            mas-cli manage register-user \
+            --username "$ADMIN_USERNAME" \
+            --password "$ADMIN_PASSWORD" \
+            --admin 2>/dev/null; then
+            print_success "管理员用户创建完成 (方法2)"
+            user_created=true
+        fi
+    fi
+
+    # 方法3: 使用环境变量
+    if [ "$user_created" = false ]; then
+        print_info "尝试方法3: 使用环境变量..."
+        if k3s kubectl exec -n "$namespace" "$mas_pod" -- \
+            env MAS_USERNAME="$ADMIN_USERNAME" MAS_PASSWORD="$ADMIN_PASSWORD" \
+            mas-cli manage register-user --admin 2>/dev/null; then
+            print_success "管理员用户创建完成 (方法3)"
+            user_created=true
+        fi
+    fi
+
+    if [ "$user_created" = false ]; then
+        print_warning "自动创建用户失败，提供手动创建指导"
         print_info "请手动执行以下命令创建管理员用户:"
         echo "kubectl exec -n $namespace -it $mas_pod -- mas-cli manage register-user"
-        echo "然后按提示输入用户名: $ADMIN_USERNAME"
-        echo "密码: $ADMIN_PASSWORD"
-        echo "并选择设置为管理员"
-
-        if confirm_action "是否现在手动创建用户"; then
-            k3s kubectl exec -n "$namespace" -it "$mas_pod" -- mas-cli manage register-user
-        fi
+        echo "然后按提示输入:"
+        echo "  用户名: $ADMIN_USERNAME"
+        echo "  密码: $ADMIN_PASSWORD"
+        echo "  设置为管理员: yes"
+        return 1
     fi
 
     print_info "管理员账户信息:"
