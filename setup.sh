@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.2.0"
+readonly SCRIPT_VERSION="2.3.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1849,10 +1849,10 @@ fix_wellknown_configuration() {
 
     local namespace="ess"
 
-    # 加载配置文件
+    # 加载配置文件（忽略readonly变量警告）
     local config_file="$INSTALL_DIR/matrix-config.env"
     if [[ -f "$config_file" ]]; then
-        source "$config_file"
+        source "$config_file" 2>/dev/null || true
         print_info "已加载配置文件: $config_file"
     else
         print_error "配置文件不存在: $config_file"
@@ -1894,17 +1894,19 @@ fix_wellknown_configuration() {
 
     print_info "修复Well-known配置，添加端口号..."
 
-    # 生成正确的Well-known配置
-    local client_config="{\"m.homeserver\":{\"base_url\":\"https://$SYNAPSE_HOST:$HTTPS_PORT\"},\"org.matrix.msc2965.authentication\":{\"account\":\"https://$AUTH_HOST:$HTTPS_PORT/account\",\"issuer\":\"https://$AUTH_HOST:$HTTPS_PORT/\"},\"org.matrix.msc4143.rtc_foci\":[{\"livekit_service_url\":\"https://$RTC_HOST:$HTTPS_PORT\",\"type\":\"livekit\"}]}"
-    local server_config="{\"m.server\":\"$SYNAPSE_HOST:$HTTPS_PORT\"}"
+    # 生成正确的Well-known配置 - 使用文件方式避免JSON转义问题
+    local patch_file="/tmp/wellknown-patch.json"
+    cat > "$patch_file" << EOF
+{
+  "data": {
+    "client": "{\"m.homeserver\":{\"base_url\":\"https://$SYNAPSE_HOST:$HTTPS_PORT\"},\"org.matrix.msc2965.authentication\":{\"account\":\"https://$AUTH_HOST:$HTTPS_PORT/account\",\"issuer\":\"https://$AUTH_HOST:$HTTPS_PORT/\"},\"org.matrix.msc4143.rtc_foci\":[{\"livekit_service_url\":\"https://$RTC_HOST:$HTTPS_PORT\",\"type\":\"livekit\"}]}",
+    "server": "{\"m.server\":\"$SYNAPSE_HOST:$HTTPS_PORT\"}"
+  }
+}
+EOF
 
     # 更新Well-known ConfigMap
-    k3s kubectl patch configmap ess-well-known-haproxy -n "$namespace" --type='merge' -p="{
-        \"data\": {
-            \"client\": \"$client_config\",
-            \"server\": \"$server_config\"
-        }
-    }"
+    k3s kubectl patch configmap ess-well-known-haproxy -n "$namespace" --type='merge' --patch-file="$patch_file"
 
     if [ $? -eq 0 ]; then
         print_success "Well-known ConfigMap更新成功"
@@ -1933,6 +1935,120 @@ fix_wellknown_configuration() {
     else
         print_warning "Well-known配置可能未完全更新，但继续部署"
     fi
+
+    return 0
+}
+
+fix_element_web_configuration() {
+    print_step "修复Element Web配置（添加自定义端口）"
+
+    local namespace="ess"
+
+    # 加载配置文件（忽略readonly变量警告）
+    local config_file="$INSTALL_DIR/matrix-config.env"
+    if [[ -f "$config_file" ]]; then
+        source "$config_file" 2>/dev/null || true
+        print_info "已加载配置文件: $config_file"
+    else
+        print_error "配置文件不存在: $config_file"
+        return 1
+    fi
+
+    # 验证必需的变量
+    if [[ -z "$SYNAPSE_HOST" || -z "$HTTPS_PORT" || -z "$SERVER_NAME" ]]; then
+        print_error "配置文件中缺少必需的变量"
+        print_info "SYNAPSE_HOST: [$SYNAPSE_HOST]"
+        print_info "HTTPS_PORT: [$HTTPS_PORT]"
+        print_info "SERVER_NAME: [$SERVER_NAME]"
+        return 1
+    fi
+
+    # 等待Element Web ConfigMap创建
+    print_info "等待Element Web ConfigMap创建..."
+    local retry_count=0
+    while ! k3s kubectl get configmap ess-element-web -n "$namespace" &> /dev/null; do
+        if [ $retry_count -ge 12 ]; then
+            print_warning "Element Web ConfigMap未找到，跳过配置修复"
+            return 1
+        fi
+        print_info "等待Element Web ConfigMap创建... ($((retry_count + 1))/12)"
+        sleep 10
+        ((retry_count++))
+    done
+
+    # 检查当前Element Web配置
+    print_info "检查当前Element Web配置..."
+    local current_config=$(k3s kubectl get configmap ess-element-web -n "$namespace" -o jsonpath='{.data.config\.json}' 2>/dev/null || echo "")
+
+    # 检查是否需要修复
+    if echo "$current_config" | grep -q ":$HTTPS_PORT"; then
+        print_success "Element Web配置已包含正确端口号"
+        return 0
+    fi
+
+    print_info "修复Element Web配置，添加端口号..."
+
+    # 生成正确的Element Web配置
+    local element_config="{
+  \"bug_report_endpoint_url\": \"https://element.io/bugreports/submit\",
+  \"default_server_config\": {
+    \"m.homeserver\": {
+      \"base_url\": \"https://$SYNAPSE_HOST:$HTTPS_PORT\",
+      \"server_name\": \"$SERVER_NAME\"
+    }
+  },
+  \"element_call\": {
+    \"use_exclusively\": true
+  },
+  \"embedded_pages\": {
+    \"login_for_welcome\": true
+  },
+  \"features\": {
+    \"feature_element_call_video_rooms\": true,
+    \"feature_group_calls\": true,
+    \"feature_new_room_decoration_ui\": true,
+    \"feature_video_rooms\": true
+  },
+  \"map_style_url\": \"https://api.maptiler.com/maps/streets/style.json?key=fU3vlMsMn4Jb6dnEIFsx\",
+  \"setting_defaults\": {
+    \"UIFeature.deactivate\": false,
+    \"UIFeature.passwordReset\": false,
+    \"UIFeature.registration\": false,
+    \"feature_group_calls\": true
+  },
+  \"sso_redirect_options\": {
+    \"immediate\": false
+  }
+}"
+
+    # 使用文件方式更新Element Web ConfigMap
+    local patch_file="/tmp/element-web-patch.json"
+    cat > "$patch_file" << EOF
+{
+  "data": {
+    "config.json": $(echo "$element_config" | jq -c .)
+  }
+}
+EOF
+
+    k3s kubectl patch configmap ess-element-web -n "$namespace" --type='merge' --patch-file="$patch_file"
+
+    if [ $? -eq 0 ]; then
+        print_success "Element Web ConfigMap更新成功"
+    else
+        print_error "Element Web ConfigMap更新失败"
+        return 1
+    fi
+
+    # 重启Element Web服务
+    print_info "重启Element Web服务..."
+    k3s kubectl rollout restart deployment ess-element-web -n "$namespace" 2>/dev/null || true
+
+    # 等待服务重启
+    sleep 10
+
+    print_success "Element Web配置修复完成，自定义端口已添加"
+    print_info "Element Web现在应该能自动检测homeserver"
 
     return 0
 }
@@ -2572,6 +2688,11 @@ full_deployment() {
     # 修复Well-known配置（添加端口号）
     if ! fix_wellknown_configuration; then
         print_warning "Well-known配置修复失败，但继续部署..."
+    fi
+
+    # 修复Element Web配置（添加端口号）
+    if ! fix_element_web_configuration; then
+        print_warning "Element Web配置修复失败，但继续部署..."
     fi
 
     # 创建SSL证书
