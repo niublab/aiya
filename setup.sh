@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.0.2"
+readonly SCRIPT_VERSION="2.1.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1823,6 +1823,80 @@ EOF
     print_success "SSL证书配置完成"
 }
 
+fix_wellknown_configuration() {
+    print_step "修复Well-known配置"
+
+    local namespace="ess"
+
+    # 等待Well-known服务启动
+    print_info "等待Well-known服务启动..."
+    local retry_count=0
+    while ! k3s kubectl get configmap ess-well-known-haproxy -n "$namespace" &> /dev/null; do
+        if [ $retry_count -ge 30 ]; then
+            print_warning "Well-known ConfigMap未找到，跳过Well-known配置修复"
+            return 1
+        fi
+        print_info "等待Well-known ConfigMap创建... ($((retry_count + 1))/30)"
+        sleep 10
+        ((retry_count++))
+    done
+
+    # 检查当前Well-known配置
+    print_info "检查当前Well-known配置..."
+    local current_client_config=$(k3s kubectl get configmap ess-well-known-haproxy -n "$namespace" -o jsonpath='{.data.client}' 2>/dev/null || echo "")
+
+    # 检查是否需要修复
+    if echo "$current_client_config" | grep -q ":$HTTPS_PORT"; then
+        print_success "Well-known配置已包含正确端口号"
+        return 0
+    fi
+
+    print_info "修复Well-known配置，添加端口号..."
+
+    # 生成正确的Well-known配置
+    local client_config="{\"m.homeserver\":{\"base_url\":\"https://$SYNAPSE_HOST:$HTTPS_PORT\"},\"org.matrix.msc2965.authentication\":{\"account\":\"https://$AUTH_HOST:$HTTPS_PORT/account\",\"issuer\":\"https://$AUTH_HOST:$HTTPS_PORT/\"},\"org.matrix.msc4143.rtc_foci\":[{\"livekit_service_url\":\"https://$RTC_HOST:$HTTPS_PORT\",\"type\":\"livekit\"}]}"
+    local server_config="{\"m.server\":\"$SYNAPSE_HOST:$HTTPS_PORT\"}"
+
+    # 更新Well-known ConfigMap
+    k3s kubectl patch configmap ess-well-known-haproxy -n "$namespace" --type='merge' -p="{
+        \"data\": {
+            \"client\": \"$client_config\",
+            \"server\": \"$server_config\"
+        }
+    }"
+
+    if [ $? -eq 0 ]; then
+        print_success "Well-known ConfigMap更新成功"
+    else
+        print_error "Well-known ConfigMap更新失败"
+        return 1
+    fi
+
+    # 重启Well-known相关服务
+    print_info "重启Well-known相关服务..."
+    k3s kubectl rollout restart deployment -n "$namespace" -l app.kubernetes.io/name=well-known-delegation 2>/dev/null || true
+    k3s kubectl rollout restart deployment -n "$namespace" -l app.kubernetes.io/name=haproxy 2>/dev/null || true
+
+    # 等待服务重启
+    sleep 30
+
+    # 验证修复结果
+    print_info "验证Well-known配置修复..."
+    local retry_count=0
+    while [ $retry_count -lt 6 ]; do
+        if curl -s --connect-timeout 5 "https://$SERVER_NAME:$HTTPS_PORT/.well-known/matrix/client" | grep -q ":$HTTPS_PORT"; then
+            print_success "Well-known配置修复完成，端口号已正确添加"
+            return 0
+        fi
+        print_info "等待Well-known配置生效... ($((retry_count + 1))/6)"
+        sleep 10
+        ((retry_count++))
+    done
+
+    print_warning "Well-known配置修复可能未完全生效，但配置已更新"
+    return 0
+}
+
 setup_port_forwarding() {
     print_step "配置端口转发服务"
 
@@ -2447,6 +2521,11 @@ full_deployment() {
     # 修复MAS配置（添加端口号）
     if ! fix_mas_configuration; then
         print_warning "MAS配置修复失败，但继续部署..."
+    fi
+
+    # 修复Well-known配置（添加端口号）
+    if ! fix_wellknown_configuration; then
+        print_warning "Well-known配置修复失败，但继续部署..."
     fi
 
     # 创建SSL证书
