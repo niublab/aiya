@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="3.1.1"
+readonly SCRIPT_VERSION="3.1.2"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1531,11 +1531,18 @@ deploy_ess() {
     local last_status=""
 
     while true; do
-        local running_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Running" || echo "0")
-        local total_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | wc -l || echo "0")
-        local completed_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Completed" || echo "0")
-        local pending_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Pending" || echo "0")
-        local failed_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c -E "(Error|CrashLoopBackOff|ImagePullBackOff)" || echo "0")
+        local running_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Running" 2>/dev/null | tr -d '\n' || echo "0")
+        local total_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | wc -l 2>/dev/null | tr -d '\n' || echo "0")
+        local completed_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Completed" 2>/dev/null | tr -d '\n' || echo "0")
+        local pending_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Pending" 2>/dev/null | tr -d '\n' || echo "0")
+        local failed_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c -E "(Error|CrashLoopBackOff|ImagePullBackOff)" 2>/dev/null | tr -d '\n' || echo "0")
+
+        # 确保所有变量都是纯数字，如果不是则设为0
+        [[ "$running_pods" =~ ^[0-9]+$ ]] || running_pods=0
+        [[ "$total_pods" =~ ^[0-9]+$ ]] || total_pods=0
+        [[ "$completed_pods" =~ ^[0-9]+$ ]] || completed_pods=0
+        [[ "$pending_pods" =~ ^[0-9]+$ ]] || pending_pods=0
+        [[ "$failed_pods" =~ ^[0-9]+$ ]] || failed_pods=0
 
         # 计算实际需要运行的Pod数量（排除Completed状态的Job Pod）
         local expected_running=$((total_pods - completed_pods))
@@ -1600,7 +1607,8 @@ deploy_ess() {
         print_info "检查 $service 状态..."
 
         # 检查Pod是否存在
-        local pod_count=$(k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name="$service" --no-headers 2>/dev/null | wc -l)
+        local pod_count=$(k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name="$service" --no-headers 2>/dev/null | wc -l 2>/dev/null | tr -d '\n' || echo "0")
+        [[ "$pod_count" =~ ^[0-9]+$ ]] || pod_count=0
         if [ "$pod_count" -eq 0 ]; then
             print_warning "$service Pod不存在，跳过"
             continue
