@@ -2041,7 +2041,7 @@ full_deployment() {
         print_warning "部署验证失败，但基础服务可能已正常运行"
     fi
 
-    # 显示完成信息
+    # 显示完成信息（无论前面步骤是否成功）
     show_deployment_summary
 }
 
