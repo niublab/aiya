@@ -704,7 +704,15 @@ install_k3s() {
 
     # 设置K3s安装参数
     export INSTALL_K3S_VERSION="$K3S_VERSION"
-    export INSTALL_K3S_EXEC="--write-kubeconfig-mode=644 --tls-san=127.0.0.1 --tls-san=localhost --tls-san=$PUBLIC_IP"
+
+    # 构建安装参数，避免空IP导致的问题
+    local install_args="--write-kubeconfig-mode=644 --tls-san=127.0.0.1 --tls-san=localhost"
+    if [[ -n "$PUBLIC_IP" && "$PUBLIC_IP" != "127.0.0.1" ]]; then
+        install_args="$install_args --tls-san=$PUBLIC_IP"
+        print_info "添加公网IP到TLS SAN: $PUBLIC_IP"
+    fi
+
+    export INSTALL_K3S_EXEC="$install_args"
 
     # 下载并执行K3s安装脚本
     curl -sfL https://get.k3s.io | sh -
