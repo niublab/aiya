@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.1.6"
+readonly SCRIPT_VERSION="2.1.7"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1925,7 +1925,10 @@ setup_port_forwarding() {
 
     # 检查ServiceLB是否正常工作
     print_info "检查K3s ServiceLB状态..."
-    local svclb_pods=$(k3s kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -c "svclb" || echo "0")
+    local svclb_pods=$(k3s kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -c "svclb" 2>/dev/null | tr -d '\n' || echo "0")
+
+    # 确保变量是纯数字，如果不是则设为0
+    [[ "$svclb_pods" =~ ^[0-9]+$ ]] || svclb_pods=0
 
     if [ "$svclb_pods" -gt 0 ]; then
         print_success "检测到ServiceLB Pod，NodePort应该正常工作"
