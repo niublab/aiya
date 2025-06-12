@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Matrix ESS Community 管理工具
-# 版本: 1.1.0
+# 版本: 1.2.0
 # 用途: 管理已部署的Matrix ESS实例
 # 命令: manage
 
@@ -84,11 +84,11 @@ get_mas_pod() {
 main_menu() {
     while true; do
         clear
-        print_header "Matrix ESS Community 管理工具"
+        print_header "Matrix ESS Community 管理工具 v1.1.0"
         echo -e "${WHITE}当前服务器:${NC} $SERVER_NAME"
         echo -e "${WHITE}Element Web:${NC} https://$WEB_HOST:$HTTPS_PORT"
         echo
-        echo -e "${WHITE}请选择管理功能:${NC}"
+        echo -e "${WHITE}请选择操作:${NC}"
         echo -e "  ${GREEN}1)${NC} 用户管理"
         echo -e "  ${GREEN}2)${NC} 系统配置"
         echo -e "  ${GREEN}3)${NC} 服务管理"
@@ -96,7 +96,7 @@ main_menu() {
         echo -e "  ${GREEN}5)${NC} 查看系统信息"
         echo -e "  ${RED}0)${NC} 退出"
         echo
-        read -p "请选择操作 [0-5]: " choice
+        read -p "请选择操作 (0-5): " choice
 
         case $choice in
             1) user_management_menu ;;
@@ -121,7 +121,7 @@ user_management_menu() {
     while true; do
         clear
         print_header "用户管理"
-        echo -e "${WHITE}请选择用户管理操作:${NC}"
+        echo -e "${WHITE}请选择操作:${NC}"
         echo -e "  ${GREEN}1)${NC} 创建普通用户"
         echo -e "  ${GREEN}2)${NC} 创建管理员用户"
         echo -e "  ${GREEN}3)${NC} 设置用户密码"
@@ -129,23 +129,35 @@ user_management_menu() {
         echo -e "  ${GREEN}5)${NC} 解锁用户"
         echo -e "  ${GREEN}6)${NC} 添加用户邮箱"
         echo -e "  ${GREEN}7)${NC} 查看用户列表"
-        echo -e "  ${GREEN}8)${NC} 生成注册令牌"
-        echo -e "  ${YELLOW}9)${NC} 返回主菜单"
+        echo -e "  ${RED}0)${NC} 返回主菜单"
         echo
-        read -p "请选择操作 [1-9]: " choice
+        read -p "请选择操作 (0-7): " choice
 
         case $choice in
-            1) create_user_interactive ;;
-            2) create_admin_user_interactive ;;
-            3) set_user_password_interactive ;;
-            4) lock_user_interactive ;;
-            5) unlock_user_interactive ;;
-            6) add_user_email_interactive ;;
-            7) list_users ;;
-            8) generate_registration_token ;;
-            9) break ;;
-            *) 
-                print_error "无效选择，请输入 1-9"
+            1)
+                create_user_interactive
+                ;;
+            2)
+                create_admin_user_interactive
+                ;;
+            3)
+                set_user_password_interactive
+                ;;
+            4)
+                lock_user_interactive
+                ;;
+            5)
+                unlock_user_interactive
+                ;;
+            6)
+                add_user_email_interactive
+                ;;
+            7)
+                list_users
+                ;;
+            0) break ;;
+            *)
+                print_error "无效选择，请输入 0-7"
                 sleep 2
                 ;;
         esac
@@ -157,27 +169,45 @@ system_config_menu() {
     while true; do
         clear
         print_header "系统配置"
-        echo -e "${WHITE}请选择配置管理操作:${NC}"
-        echo -e "  ${GREEN}1)${NC} 启用/禁用用户注册"
+        echo -e "${WHITE}请选择操作:${NC}"
+        echo -e "  ${GREEN}1)${NC} 查看注册状态"
         echo -e "  ${GREEN}2)${NC} 查看当前配置"
         echo -e "  ${GREEN}3)${NC} 修复Well-known配置"
         echo -e "  ${GREEN}4)${NC} 修复Element Web配置"
         echo -e "  ${GREEN}5)${NC} 重新申请SSL证书"
         echo -e "  ${GREEN}6)${NC} 更新系统配置"
-        echo -e "  ${YELLOW}7)${NC} 返回主菜单"
+        echo -e "  ${RED}0)${NC} 返回主菜单"
         echo
-        read -p "请选择操作 [1-7]: " choice
+        read -p "请选择操作 (0-6): " choice
 
         case $choice in
-            1) toggle_user_registration ;;
-            2) show_current_config ;;
-            3) fix_wellknown_configuration ;;
-            4) fix_element_web_configuration ;;
-            5) recreate_ssl_certificates ;;
-            6) update_system_config ;;
-            7) break ;;
-            *) 
-                print_error "无效选择，请输入 1-7"
+            1)
+                show_registration_status
+                read -p "按回车键继续..."
+                ;;
+            2)
+                show_current_config
+                read -p "按回车键继续..."
+                ;;
+            3)
+                fix_wellknown_configuration
+                read -p "按回车键继续..."
+                ;;
+            4)
+                fix_element_web_configuration
+                read -p "按回车键继续..."
+                ;;
+            5)
+                recreate_ssl_certificates
+                read -p "按回车键继续..."
+                ;;
+            6)
+                update_system_config
+                read -p "按回车键继续..."
+                ;;
+            0) break ;;
+            *)
+                print_error "无效选择，请输入 0-6"
                 sleep 2
                 ;;
         esac
@@ -189,7 +219,7 @@ service_management_menu() {
     while true; do
         clear
         print_header "服务管理"
-        echo -e "${WHITE}请选择服务管理操作:${NC}"
+        echo -e "${WHITE}请选择操作:${NC}"
         echo -e "  ${GREEN}1)${NC} 查看服务状态"
         echo -e "  ${GREEN}2)${NC} 重启所有服务"
         echo -e "  ${GREEN}3)${NC} 重启Element Web"
@@ -197,21 +227,41 @@ service_management_menu() {
         echo -e "  ${GREEN}5)${NC} 重启Synapse"
         echo -e "  ${GREEN}6)${NC} 查看服务日志"
         echo -e "  ${GREEN}7)${NC} 清理重启Pod"
-        echo -e "  ${YELLOW}8)${NC} 返回主菜单"
+        echo -e "  ${RED}0)${NC} 返回主菜单"
         echo
-        read -p "请选择操作 [1-8]: " choice
+        read -p "请选择操作 (0-7): " choice
 
         case $choice in
-            1) show_service_status ;;
-            2) restart_all_services ;;
-            3) restart_element_web ;;
-            4) restart_auth_service ;;
-            5) restart_synapse ;;
-            6) show_service_logs ;;
-            7) cleanup_restart_pods ;;
-            8) break ;;
-            *) 
-                print_error "无效选择，请输入 1-8"
+            1)
+                show_service_status
+                read -p "按回车键继续..."
+                ;;
+            2)
+                restart_all_services
+                read -p "按回车键继续..."
+                ;;
+            3)
+                restart_element_web
+                read -p "按回车键继续..."
+                ;;
+            4)
+                restart_auth_service
+                read -p "按回车键继续..."
+                ;;
+            5)
+                restart_synapse
+                read -p "按回车键继续..."
+                ;;
+            6)
+                show_service_logs
+                ;;
+            7)
+                cleanup_restart_pods
+                read -p "按回车键继续..."
+                ;;
+            0) break ;;
+            *)
+                print_error "无效选择，请输入 0-7"
                 sleep 2
                 ;;
         esac
@@ -223,7 +273,7 @@ system_diagnostics_menu() {
     while true; do
         clear
         print_header "系统诊断"
-        echo -e "${WHITE}请选择诊断操作:${NC}"
+        echo -e "${WHITE}请选择操作:${NC}"
         echo -e "  ${GREEN}1)${NC} 完整系统检查"
         echo -e "  ${GREEN}2)${NC} 网络连通性测试"
         echo -e "  ${GREEN}3)${NC} SSL证书检查"
@@ -231,21 +281,42 @@ system_diagnostics_menu() {
         echo -e "  ${GREEN}5)${NC} 服务健康检查"
         echo -e "  ${GREEN}6)${NC} 存储空间检查"
         echo -e "  ${GREEN}7)${NC} 性能监控"
-        echo -e "  ${YELLOW}8)${NC} 返回主菜单"
+        echo -e "  ${RED}0)${NC} 返回主菜单"
         echo
-        read -p "请选择操作 [1-8]: " choice
+        read -p "请选择操作 (0-7): " choice
 
         case $choice in
-            1) full_system_check ;;
-            2) network_connectivity_test ;;
-            3) ssl_certificate_check ;;
-            4) wellknown_config_check ;;
-            5) service_health_check ;;
-            6) storage_space_check ;;
-            7) performance_monitoring ;;
-            8) break ;;
-            *) 
-                print_error "无效选择，请输入 1-8"
+            1)
+                full_system_check
+                read -p "按回车键继续..."
+                ;;
+            2)
+                network_connectivity_test
+                read -p "按回车键继续..."
+                ;;
+            3)
+                ssl_certificate_check
+                read -p "按回车键继续..."
+                ;;
+            4)
+                wellknown_config_check
+                read -p "按回车键继续..."
+                ;;
+            5)
+                service_health_check
+                read -p "按回车键继续..."
+                ;;
+            6)
+                storage_space_check
+                read -p "按回车键继续..."
+                ;;
+            7)
+                performance_monitoring
+                read -p "按回车键继续..."
+                ;;
+            0) break ;;
+            *)
+                print_error "无效选择，请输入 0-7"
                 sleep 2
                 ;;
         esac
@@ -296,8 +367,6 @@ create_user_interactive() {
     else
         print_error "用户创建失败"
     fi
-
-    read -p "按回车键继续..."
 }
 
 # 创建管理员用户
@@ -536,112 +605,32 @@ list_users() {
     read -p "按回车键继续..."
 }
 
-# 生成注册令牌
-generate_registration_token() {
-    print_step "生成注册令牌"
-
-    print_warning "在MAS环境下，注册令牌功能已被禁用"
-    print_info "请使用以下替代方案："
-    echo "1. 启用Element Web的用户注册功能"
-    echo "2. 管理员手动创建用户账户"
-    echo "3. 配置外部身份提供商(SSO)"
-    echo
-    print_info "要启用用户注册，请选择 '2) 系统配置' -> '1) 启用/禁用用户注册'"
-
-    read -p "按回车键继续..."
-}
-
-# 启用/禁用用户注册
-toggle_user_registration() {
-    print_step "用户注册设置"
+# 查看注册状态
+show_registration_status() {
+    print_step "查看用户注册状态"
 
     # 检查当前状态
-    local current_status=$(k3s kubectl get configmap ess-element-web -n ess -o jsonpath='{.data.config\.json}' | jq -r '.setting_defaults."UIFeature.registration"')
+    local current_status=$(k3s kubectl get configmap ess-element-web -n ess -o jsonpath='{.data.config\.json}' | jq -r '.setting_defaults."UIFeature.registration"' 2>/dev/null)
 
-    echo "当前注册状态: $([ "$current_status" = "true" ] && echo "启用" || echo "禁用")"
-    echo
-    echo "1) 启用用户注册"
-    echo "2) 禁用用户注册"
-    echo "3) 返回"
-    echo
-    read -p "请选择操作 [1-3]: " choice
-
-    case $choice in
-        1)
-            print_info "启用用户注册..."
-            update_registration_setting true
-            ;;
-        2)
-            print_info "禁用用户注册..."
-            update_registration_setting false
-            ;;
-        3)
-            return
-            ;;
-        *)
-            print_error "无效选择"
-            ;;
-    esac
-
-    read -p "按回车键继续..."
-}
-
-# 更新注册设置
-update_registration_setting() {
-    local enable="$1"
-
-    # 生成新的Element Web配置
-    local element_config="{
-  \"bug_report_endpoint_url\": \"https://element.io/bugreports/submit\",
-  \"default_server_config\": {
-    \"m.homeserver\": {
-      \"base_url\": \"https://$SYNAPSE_HOST:$HTTPS_PORT\",
-      \"server_name\": \"$SERVER_NAME\"
-    }
-  },
-  \"element_call\": {
-    \"use_exclusively\": true
-  },
-  \"embedded_pages\": {
-    \"login_for_welcome\": true
-  },
-  \"features\": {
-    \"feature_element_call_video_rooms\": true,
-    \"feature_group_calls\": true,
-    \"feature_new_room_decoration_ui\": true,
-    \"feature_video_rooms\": true
-  },
-  \"map_style_url\": \"https://api.maptiler.com/maps/streets/style.json?key=fU3vlMsMn4Jb6dnEIFsx\",
-  \"setting_defaults\": {
-    \"UIFeature.deactivate\": false,
-    \"UIFeature.passwordReset\": false,
-    \"UIFeature.registration\": $enable,
-    \"feature_group_calls\": true
-  },
-  \"sso_redirect_options\": {
-    \"immediate\": false
-  }
-}"
-
-    # 更新配置
-    local patch_file="/tmp/element-web-registration-patch.json"
-    cat > "$patch_file" << EOF
-{
-  "data": {
-    "config.json": $(echo "$element_config" | jq -c .)
-  }
-}
-EOF
-
-    if k3s kubectl patch configmap ess-element-web -n ess --type='merge' --patch-file="$patch_file"; then
-        print_success "注册设置更新成功"
-        print_info "重启Element Web服务..."
-        k3s kubectl rollout restart deployment ess-element-web -n ess
-        print_success "设置已生效，注册功能$([ "$enable" = "true" ] && echo "已启用" || echo "已禁用")"
+    echo -e "${WHITE}当前注册状态:${NC}"
+    if [[ "$current_status" == "true" ]]; then
+        echo -e "  ${GREEN}✓ 用户注册已启用${NC}"
+        echo "  用户可以在Element Web中自行注册账户"
     else
-        print_error "注册设置更新失败"
+        echo -e "  ${RED}✗ 用户注册已禁用${NC}"
+        echo "  只能由管理员手动创建用户账户"
     fi
+
+    echo
+    echo -e "${WHITE}注册方式说明:${NC}"
+    echo "1. Element Web注册 - 通过Web界面自助注册"
+    echo "2. 管理员创建 - 使用本工具的用户管理功能"
+    echo "3. 外部SSO - 配置第三方身份提供商"
+    echo
+    print_info "注意: MAS环境下不支持注册令牌功能"
 }
+
+
 
 # 查看当前配置
 show_current_config() {
