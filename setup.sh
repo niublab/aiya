@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="3.0.0"
+readonly SCRIPT_VERSION="3.1.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1502,7 +1502,7 @@ deploy_ess() {
 
     # 部署ESS使用OCI registry
     print_info "部署Element Server Suite (使用OCI registry)..."
-    local helm_cmd="helm install ess $oci_chart --namespace $namespace --values $values_file --wait --timeout=1800s"
+    local helm_cmd="helm install ess $oci_chart --namespace $namespace --values $values_file --timeout=300s"
 
     # 尝试使用指定版本
     if helm show chart "$oci_chart" --version "$ESS_VERSION" &> /dev/null; then
@@ -1524,34 +1524,74 @@ deploy_ess() {
         return 1
     fi
 
-    # 等待所有Pod启动
+    # 智能等待所有Pod启动
     print_info "等待所有服务启动..."
     local retry_count=0
+    local max_retries=60  # 10分钟最大等待时间
+    local last_status=""
+
     while true; do
         local running_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Running" || echo "0")
         local total_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | wc -l || echo "0")
         local completed_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Completed" || echo "0")
+        local pending_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Pending" || echo "0")
+        local failed_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c -E "(Error|CrashLoopBackOff|ImagePullBackOff)" || echo "0")
 
         # 计算实际需要运行的Pod数量（排除Completed状态的Job Pod）
         local expected_running=$((total_pods - completed_pods))
 
-        if [ "$total_pods" -gt 0 ] && [ "$expected_running" -gt 0 ] && [ "$running_pods" -eq "$expected_running" ]; then
-            print_success "所有服务Pod已启动 ($running_pods/$expected_running 运行中, $completed_pods 已完成)"
+        # 生成当前状态描述
+        local current_status="运行中:$running_pods/$expected_running"
+        if [ "$completed_pods" -gt 0 ]; then
+            current_status="$current_status, 已完成:$completed_pods"
+        fi
+        if [ "$pending_pods" -gt 0 ]; then
+            current_status="$current_status, 等待中:$pending_pods"
+        fi
+        if [ "$failed_pods" -gt 0 ]; then
+            current_status="$current_status, 失败:$failed_pods"
+        fi
+
+        # 检查是否所有服务都已启动
+        if [ "$total_pods" -gt 0 ] && [ "$expected_running" -gt 0 ] && [ "$running_pods" -eq "$expected_running" ] && [ "$failed_pods" -eq 0 ]; then
+            print_success "所有服务Pod已启动 ($current_status)"
             break
         fi
 
-        if [ $retry_count -ge 60 ]; then  # 10分钟超时
-            print_warning "等待服务启动超时 (10分钟)，但继续部署"
-            print_info "当前Pod状态:"
+        # 检查是否有失败的Pod
+        if [ "$failed_pods" -gt 0 ]; then
+            print_warning "检测到失败的Pod，显示详细状态:"
+            k3s kubectl get pods -n "$namespace" | grep -E "(Error|CrashLoopBackOff|ImagePullBackOff)" || true
+        fi
+
+        # 超时检查
+        if [ $retry_count -ge $max_retries ]; then
+            print_warning "等待服务启动超时 (10分钟)，当前状态: $current_status"
+            print_info "显示所有Pod状态:"
             k3s kubectl get pods -n "$namespace"
-            print_info "运行中: $running_pods, 总计: $total_pods, 已完成: $completed_pods"
+            if [ "$failed_pods" -gt 0 ]; then
+                print_warning "有Pod启动失败，但继续部署流程"
+            fi
             break  # 不返回错误，继续部署
         fi
 
-        print_info "等待服务启动... ($running_pods/$expected_running 运行中, $completed_pods 已完成) ($((retry_count + 1))/60)"
+        # 只在状态变化时显示详细信息，避免刷屏
+        if [ "$current_status" != "$last_status" ]; then
+            print_info "Pod状态更新: $current_status"
+            last_status="$current_status"
+        else
+            # 状态未变化时显示简化信息
+            echo -n "."
+        fi
+
         sleep 10
         ((retry_count++))
     done
+
+    # 如果有点号输出，换行
+    if [ "$current_status" = "$last_status" ] && [ $retry_count -gt 1 ]; then
+        echo ""
+    fi
 
     # 等待关键服务就绪
     print_info "等待关键服务就绪..."
