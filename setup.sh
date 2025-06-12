@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.1.5"
+readonly SCRIPT_VERSION="2.1.6"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -180,8 +180,6 @@ setup_k8s_env() {
 get_public_ip() {
     local domain="$1"
     local ip=""
-
-    print_info "获取公网IP地址..."
 
     # 尝试通过自定义域名获取
     if [[ -n "$domain" ]]; then
@@ -531,6 +529,7 @@ collect_network_config() {
     done
 
     # 获取公网IP
+    print_info "获取公网IP地址..."
     PUBLIC_IP=$(get_public_ip "$SERVER_NAME")
     print_info "检测到公网IP: $PUBLIC_IP"
 
@@ -1832,6 +1831,26 @@ fix_wellknown_configuration() {
     print_step "修复Well-known配置（添加自定义端口）"
 
     local namespace="ess"
+
+    # 加载配置文件
+    local config_file="$INSTALL_DIR/matrix-config.env"
+    if [[ -f "$config_file" ]]; then
+        source "$config_file"
+        print_info "已加载配置文件: $config_file"
+    else
+        print_error "配置文件不存在: $config_file"
+        return 1
+    fi
+
+    # 验证必需的变量
+    if [[ -z "$SYNAPSE_HOST" || -z "$AUTH_HOST" || -z "$RTC_HOST" || -z "$HTTPS_PORT" ]]; then
+        print_error "配置文件中缺少必需的变量"
+        print_info "SYNAPSE_HOST: [$SYNAPSE_HOST]"
+        print_info "AUTH_HOST: [$AUTH_HOST]"
+        print_info "RTC_HOST: [$RTC_HOST]"
+        print_info "HTTPS_PORT: [$HTTPS_PORT]"
+        return 1
+    fi
 
     # 等待Well-known ConfigMap创建（ESS自动生成）
     print_info "等待ESS生成Well-known配置..."
