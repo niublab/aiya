@@ -919,10 +919,12 @@ configure_traefik() {
         return 1
     fi
 
-    print_info "配置Traefik端口映射..."
+    # 检查Traefik是否已禁用
+    if k3s kubectl get deployment traefik -n kube-system &> /dev/null; then
+        print_info "检测到Traefik已启用，配置端口映射..."
 
-    # 创建Traefik配置
-    cat << EOF | k3s kubectl apply -f -
+        # 创建Traefik配置
+        cat << EOF | k3s kubectl apply -f -
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -955,19 +957,41 @@ spec:
       - "--certificatesresolvers.default.acme.caserver=https://acme-v02.api.letsencrypt.org/directory"
 EOF
 
-    # 等待Traefik重新配置
-    print_info "等待Traefik重新配置..."
-    sleep 30
+        # 等待Traefik重新配置
+        print_info "等待Traefik重新配置..."
+        sleep 30
 
-    # 重启Traefik
-    print_info "重启Traefik服务..."
-    k3s kubectl rollout restart deployment traefik -n kube-system
+        # 重启Traefik
+        print_info "重启Traefik服务..."
+        k3s kubectl rollout restart deployment traefik -n kube-system
 
-    # 等待Traefik就绪
-    print_info "等待Traefik就绪..."
-    k3s kubectl rollout status deployment traefik -n kube-system --timeout=300s
+        # 等待Traefik就绪
+        print_info "等待Traefik就绪..."
+        k3s kubectl rollout status deployment traefik -n kube-system --timeout=300s
 
-    print_success "Traefik配置完成"
+        print_success "Traefik配置完成"
+    else
+        print_warning "Traefik已被禁用，手动安装Traefik..."
+
+        # 手动安装Traefik
+        print_info "添加Traefik Helm仓库..."
+        helm repo add traefik https://traefik.github.io/charts || true
+        helm repo update || true
+
+        print_info "安装Traefik..."
+        helm install traefik traefik/traefik \
+            --namespace kube-system \
+            --set ports.web.exposedPort=$HTTP_PORT \
+            --set ports.websecure.exposedPort=$HTTPS_PORT \
+            --set service.type=LoadBalancer \
+            --timeout=300s || true
+
+        # 等待Traefik启动
+        print_info "等待Traefik启动..."
+        k3s kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=traefik -n kube-system --timeout=300s || true
+
+        print_success "Traefik手动安装完成"
+    fi
 }
 
 install_helm() {
@@ -1946,7 +1970,11 @@ full_deployment() {
         fi
     fi
 
-    configure_traefik
+    # 配置Traefik（如果需要）
+    if ! configure_traefik; then
+        print_warning "Traefik配置失败，但继续部署..."
+    fi
+
     install_helm
     install_cert_manager
     configure_cert_manager
