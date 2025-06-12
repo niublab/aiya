@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.4.0"
+readonly SCRIPT_VERSION="2.5.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -3099,15 +3099,15 @@ show_main_menu() {
     
     echo -e "${WHITE}请选择操作:${NC}"
     echo -e "  ${GREEN}1)${NC} 完整部署 Matrix ESS"
-    echo -e "  ${GREEN}2)${NC} Matrix管理菜单"
-    echo -e "  ${GREEN}3)${NC} 配置管理"
-    echo -e "  ${GREEN}4)${NC} 服务管理"
-    echo -e "  ${GREEN}5)${NC} 清理环境"
-    echo -e "  ${GREEN}6)${NC} 系统信息"
-    echo -e "  ${GREEN}7)${NC} 网络诊断"
-    echo -e "  ${GREEN}8)${NC} 备份配置"
-    echo -e "  ${GREEN}9)${NC} 检查组件版本"
-    echo -e "  ${GREEN}10)${NC} 检查脚本更新"
+    echo -e "  ${GREEN}2)${NC} 配置管理"
+    echo -e "  ${GREEN}3)${NC} 服务管理"
+    echo -e "  ${GREEN}4)${NC} 清理环境"
+    echo -e "  ${GREEN}5)${NC} 系统信息"
+    echo -e "  ${GREEN}6)${NC} 网络诊断"
+    echo -e "  ${GREEN}7)${NC} 备份配置"
+    echo -e "  ${GREEN}8)${NC} 检查组件版本"
+    echo -e "  ${GREEN}9)${NC} 检查脚本更新"
+    echo -e "  ${BLUE}M)${NC} 下载管理脚本"
     echo -e "  ${RED}0)${NC} 退出"
     echo
 }
@@ -3115,9 +3115,18 @@ show_main_menu() {
 # ==================== 主程序入口 ====================
 
 main() {
+    # 检测脚本来源URL（用于下载管理脚本）
+    if [[ -z "${SCRIPT_SOURCE_URL:-}" ]]; then
+        # 尝试从进程信息中获取脚本来源
+        local script_source=$(ps -o args= -p $$ | grep -o 'https://[^[:space:]]*setup\.sh' | head -1)
+        if [[ -n "$script_source" ]]; then
+            export SCRIPT_SOURCE_URL="$script_source"
+        fi
+    fi
+
     # 显示许可证
     show_license
-    
+
     # 检查系统环境
     check_system_requirements
     install_dependencies
@@ -3125,25 +3134,22 @@ main() {
     # 主循环
     while true; do
         show_main_menu
-        read -p "请选择操作 (0-10): " choice
+        read -p "请选择操作 (0-9,M): " choice
 
         case $choice in
             1)
                 full_deployment
                 ;;
             2)
-                matrix_management_menu
-                ;;
-            3)
                 config_management_menu
                 ;;
-            4)
+            3)
                 service_management_menu
                 ;;
-            5)
+            4)
                 cleanup_menu
                 ;;
-            6)
+            5)
                 clear
                 print_header "系统信息"
                 echo -e "${WHITE}脚本信息:${NC}"
@@ -3175,235 +3181,63 @@ main() {
                 check_script_update
                 read -p "按回车键继续..."
                 ;;
+            [Mm])
+                download_management_script
+                read -p "按回车键继续..."
+                ;;
             0)
                 echo -e "\n${GREEN}感谢使用！${NC}\n"
                 exit 0
                 ;;
             *)
-                print_error "无效选择，请输入 0-9"
+                print_error "无效选择，请输入 0-9,M"
                 sleep 2
                 ;;
         esac
     done
 }
 
-# Matrix管理菜单
-matrix_management_menu() {
-    while true; do
-        echo
-        print_header "Matrix ESS 管理菜单"
-        echo "1) 用户管理"
-        echo "2) 系统配置"
-        echo "3) 服务管理"
-        echo "4) 系统诊断"
-        echo "5) 返回主菜单"
-        echo
-        read -p "请选择操作 [1-5]: " choice
+# 下载管理脚本
+download_management_script() {
+    print_step "下载Matrix管理脚本"
 
-        case $choice in
-            1) user_management_menu ;;
-            2) system_config_menu ;;
-            3) service_management_menu ;;
-            4) system_diagnostics_menu ;;
-            5) break ;;
-            *) print_error "无效选择，请输入 1-5" ;;
-        esac
-    done
-}
-
-# 用户管理菜单
-user_management_menu() {
-    while true; do
-        echo
-        print_header "用户管理"
-        echo "1) 创建用户"
-        echo "2) 创建管理员用户"
-        echo "3) 锁定用户"
-        echo "4) 解锁用户"
-        echo "5) 设置用户密码"
-        echo "6) 添加用户邮箱"
-        echo "7) 生成注册令牌"
-        echo "8) 返回上级菜单"
-        echo
-        read -p "请选择操作 [1-8]: " choice
-
-        case $choice in
-            1) create_user_interactive ;;
-            2) create_admin_user_interactive ;;
-            3) lock_user_interactive ;;
-            4) unlock_user_interactive ;;
-            5) set_user_password_interactive ;;
-            6) add_user_email_interactive ;;
-            7) generate_registration_token ;;
-            8) break ;;
-            *) print_error "无效选择，请输入 1-8" ;;
-        esac
-    done
-}
-
-# 交互式创建用户
-create_user_interactive() {
-    print_step "创建新用户"
-
-    read -p "请输入用户名: " username
-    if [[ -z "$username" ]]; then
-        print_error "用户名不能为空"
-        return 1
-    fi
-
-    read -s -p "请输入密码: " password
-    echo
-    if [[ -z "$password" ]]; then
-        print_error "密码不能为空"
-        return 1
-    fi
-
-    read -p "是否设置为管理员? [y/N]: " is_admin
-
-    local admin_flag=""
-    if [[ "$is_admin" =~ ^[Yy]$ ]]; then
-        admin_flag="--admin"
-    fi
-
-    print_info "创建用户: $username"
-    local mas_pod=$(k3s kubectl get pods -n ess -l app.kubernetes.io/name=matrix-authentication-service --no-headers -o custom-columns=":metadata.name" | head -1)
-
-    if k3s kubectl exec -n ess "$mas_pod" -- \
-        mas-cli manage register-user \
-        --yes \
-        "$username" \
-        --password "$password" \
-        $admin_flag; then
-        print_success "用户 $username 创建成功"
+    # 动态获取当前脚本的下载源
+    local base_url
+    if [[ -n "${SCRIPT_SOURCE_URL:-}" ]]; then
+        # 如果有设置脚本源URL，使用相同的源
+        base_url="${SCRIPT_SOURCE_URL%/*}"
     else
-        print_error "用户创建失败"
-    fi
-}
-
-# 交互式创建管理员用户
-create_admin_user_interactive() {
-    print_step "创建管理员用户"
-
-    read -p "请输入管理员用户名: " username
-    if [[ -z "$username" ]]; then
-        print_error "用户名不能为空"
-        return 1
+        # 默认使用GitHub仓库
+        base_url="https://raw.githubusercontent.com/niublab/aiya/main"
     fi
 
-    read -s -p "请输入密码: " password
-    echo
-    if [[ -z "$password" ]]; then
-        print_error "密码不能为空"
-        return 1
-    fi
+    local script_url="$base_url/manage.sh"
+    local script_path="/usr/local/bin/matrix-manage"
 
-    print_info "创建管理员用户: $username"
-    local mas_pod=$(k3s kubectl get pods -n ess -l app.kubernetes.io/name=matrix-authentication-service --no-headers -o custom-columns=":metadata.name" | head -1)
-
-    if k3s kubectl exec -n ess "$mas_pod" -- \
-        mas-cli manage register-user \
-        --yes \
-        "$username" \
-        --password "$password" \
-        --admin; then
-        print_success "管理员用户 $username 创建成功"
+    print_info "下载管理脚本..."
+    if curl -fsSL "$script_url" -o "$script_path"; then
+        chmod +x "$script_path"
+        print_success "管理脚本下载成功"
+        print_info "脚本位置: $script_path"
+        print_info "使用方法: matrix-manage"
+        echo
+        print_info "管理脚本功能:"
+        echo "  - 用户管理 (创建、删除、锁定用户)"
+        echo "  - 系统配置 (启用注册、修复配置)"
+        echo "  - 服务管理 (重启服务、查看日志)"
+        echo "  - 系统诊断 (健康检查、性能监控)"
+        echo
+        print_success "现在可以运行 'matrix-manage' 命令来管理Matrix服务"
     else
-        print_error "管理员用户创建失败"
+        print_error "管理脚本下载失败"
+        print_info "您可以手动下载:"
+        echo "curl -fsSL $script_url -o $script_path && chmod +x $script_path"
     fi
 }
 
-# 启用/禁用用户注册
-toggle_user_registration() {
-    print_step "用户注册设置"
 
-    # 检查当前状态
-    local current_status=$(k3s kubectl get configmap ess-element-web -n ess -o jsonpath='{.data.config\.json}' | jq -r '.setting_defaults."UIFeature.registration"')
 
-    echo "当前注册状态: $([ "$current_status" = "true" ] && echo "启用" || echo "禁用")"
-    echo
-    echo "1) 启用用户注册"
-    echo "2) 禁用用户注册"
-    echo "3) 返回"
-    echo
-    read -p "请选择操作 [1-3]: " choice
 
-    case $choice in
-        1)
-            print_info "启用用户注册..."
-            update_registration_setting true
-            ;;
-        2)
-            print_info "禁用用户注册..."
-            update_registration_setting false
-            ;;
-        3)
-            return
-            ;;
-        *)
-            print_error "无效选择"
-            ;;
-    esac
-}
-
-# 更新注册设置
-update_registration_setting() {
-    local enable="$1"
-
-    # 加载配置
-    source "$INSTALL_DIR/matrix-config.env" 2>/dev/null || true
-
-    # 生成新的Element Web配置
-    local element_config="{
-  \"bug_report_endpoint_url\": \"https://element.io/bugreports/submit\",
-  \"default_server_config\": {
-    \"m.homeserver\": {
-      \"base_url\": \"https://$SYNAPSE_HOST:$HTTPS_PORT\",
-      \"server_name\": \"$SERVER_NAME\"
-    }
-  },
-  \"element_call\": {
-    \"use_exclusively\": true
-  },
-  \"embedded_pages\": {
-    \"login_for_welcome\": true
-  },
-  \"features\": {
-    \"feature_element_call_video_rooms\": true,
-    \"feature_group_calls\": true,
-    \"feature_new_room_decoration_ui\": true,
-    \"feature_video_rooms\": true
-  },
-  \"map_style_url\": \"https://api.maptiler.com/maps/streets/style.json?key=fU3vlMsMn4Jb6dnEIFsx\",
-  \"setting_defaults\": {
-    \"UIFeature.deactivate\": false,
-    \"UIFeature.passwordReset\": false,
-    \"UIFeature.registration\": $enable,
-    \"feature_group_calls\": true
-  },
-  \"sso_redirect_options\": {
-    \"immediate\": false
-  }
-}"
-
-    # 更新配置
-    local patch_file="/tmp/element-web-registration-patch.json"
-    cat > "$patch_file" << EOF
-{
-  "data": {
-    "config.json": $(echo "$element_config" | jq -c .)
-  }
-}
-EOF
-
-    if k3s kubectl patch configmap ess-element-web -n ess --type='merge' --patch-file="$patch_file"; then
-        print_success "注册设置更新成功"
-        print_info "重启Element Web服务..."
-        k3s kubectl rollout restart deployment ess-element-web -n ess
-        print_success "设置已生效，注册功能$([ "$enable" = "true" ] && echo "已启用" || echo "已禁用")"
-    else
-        print_error "注册设置更新失败"
-    fi
-}
 
 # 脚本入口
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
