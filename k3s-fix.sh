@@ -121,7 +121,11 @@ reinstall_k3s() {
     export INSTALL_K3S_EXEC="--write-kubeconfig-mode=644"
     
     print_info "下载并安装K3s..."
-    curl -sfL https://get.k3s.io | sh -
+    # 使用清理的环境避免颜色代码污染
+    env -i PATH="$PATH" \
+        INSTALL_K3S_VERSION="$INSTALL_K3S_VERSION" \
+        INSTALL_K3S_EXEC="$INSTALL_K3S_EXEC" \
+        bash -c 'curl -sfL https://get.k3s.io | sh -'
     
     # 等待服务启动
     print_info "等待K3s服务启动..."

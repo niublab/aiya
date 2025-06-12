@@ -714,8 +714,11 @@ install_k3s() {
 
     export INSTALL_K3S_EXEC="$install_args"
 
-    # 下载并执行K3s安装脚本
-    curl -sfL https://get.k3s.io | sh -
+    # 下载并执行K3s安装脚本（清理环境变量避免颜色代码污染）
+    env -i PATH="$PATH" \
+        INSTALL_K3S_VERSION="$INSTALL_K3S_VERSION" \
+        INSTALL_K3S_EXEC="$INSTALL_K3S_EXEC" \
+        bash -c 'curl -sfL https://get.k3s.io | sh -'
 
     # 等待K3s服务启动
     print_info "等待K3s服务启动..."
