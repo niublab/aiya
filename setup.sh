@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="3.1.0"
+readonly SCRIPT_VERSION="3.1.1"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -2136,7 +2136,10 @@ setup_servicelb_and_network() {
 
     # 检查ServiceLB状态
     print_info "检查K3s ServiceLB状态..."
-    local svclb_pods=$(k3s kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -c "svclb" 2>/dev/null || echo "0")
+    local svclb_pods=$(k3s kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -c "svclb" 2>/dev/null | tr -d '\n' || echo "0")
+
+    # 确保变量是纯数字，如果不是则设为0
+    [[ "$svclb_pods" =~ ^[0-9]+$ ]] || svclb_pods=0
 
     if [ "$svclb_pods" -eq 0 ]; then
         print_warning "ServiceLB未运行，正在修复..."
@@ -2179,7 +2182,8 @@ EOF
         print_info "等待ServiceLB启动..."
         local retry_count=0
         while [ $retry_count -lt 12 ]; do
-            svclb_pods=$(k3s kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -c "svclb" 2>/dev/null || echo "0")
+            svclb_pods=$(k3s kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -c "svclb" 2>/dev/null | tr -d '\n' || echo "0")
+            [[ "$svclb_pods" =~ ^[0-9]+$ ]] || svclb_pods=0
             if [ "$svclb_pods" -gt 0 ]; then
                 print_success "ServiceLB已启动"
                 break
