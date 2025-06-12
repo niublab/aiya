@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.1.7"
+readonly SCRIPT_VERSION="2.2.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1767,6 +1767,19 @@ spec:
     kind: ClusterIssuer
   dnsNames:
   - $SYNAPSE_HOST
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: main-$(echo "$SERVER_NAME" | tr '.' '-')-tls
+  namespace: $namespace
+spec:
+  secretName: main-$(echo "$SERVER_NAME" | tr '.' '-')-tls
+  issuerRef:
+    name: $issuer_name
+    kind: ClusterIssuer
+  dnsNames:
+  - $SERVER_NAME
 EOF
 
     # 等待证书申请
@@ -1802,9 +1815,9 @@ EOF
     print_info "更新Ingress以使用SSL证书..."
 
     # 为每个Ingress添加TLS配置
-    local ingresses=("ess-element-web" "ess-matrix-authentication-service" "ess-matrix-rtc" "ess-synapse")
-    local hosts=("$WEB_HOST" "$AUTH_HOST" "$RTC_HOST" "$SYNAPSE_HOST")
-    local secrets=("app-$(echo "$WEB_HOST" | tr '.' '-')-tls" "mas-$(echo "$AUTH_HOST" | tr '.' '-')-tls" "rtc-$(echo "$RTC_HOST" | tr '.' '-')-tls" "matrix-$(echo "$SYNAPSE_HOST" | tr '.' '-')-tls")
+    local ingresses=("ess-element-web" "ess-matrix-authentication-service" "ess-matrix-rtc" "ess-synapse" "ess-well-known")
+    local hosts=("$WEB_HOST" "$AUTH_HOST" "$RTC_HOST" "$SYNAPSE_HOST" "$SERVER_NAME")
+    local secrets=("app-$(echo "$WEB_HOST" | tr '.' '-')-tls" "mas-$(echo "$AUTH_HOST" | tr '.' '-')-tls" "rtc-$(echo "$RTC_HOST" | tr '.' '-')-tls" "matrix-$(echo "$SYNAPSE_HOST" | tr '.' '-')-tls" "main-$(echo "$SERVER_NAME" | tr '.' '-')-tls")
 
     for i in "${!ingresses[@]}"; do
         local ingress="${ingresses[$i]}"
@@ -1823,6 +1836,10 @@ EOF
             }
         }" || print_warning "更新 $ingress Ingress失败"
     done
+
+    # 特殊处理Well-known Ingress - 移除TLS配置以避免证书问题
+    print_info "配置Well-known Ingress使用HTTP..."
+    k3s kubectl patch ingress ess-well-known -n "$namespace" --type='json' -p='[{"op":"remove","path":"/spec/tls"}]' 2>/dev/null || print_warning "移除Well-known TLS配置失败"
 
     print_success "SSL证书配置完成"
 }
