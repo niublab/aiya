@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.1.4"
+readonly SCRIPT_VERSION="2.1.5"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1185,7 +1185,7 @@ install_cert_manager() {
     if ! helm install cert-manager jetstack/cert-manager \
         --namespace cert-manager \
         --version "$CERT_MANAGER_VERSION" \
-        --set installCRDs=true \
+        --set crds.enabled=true \
         --set global.leaderElection.namespace=cert-manager \
         --timeout=600s; then
         print_error "cert-manager安装失败"
