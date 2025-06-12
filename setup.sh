@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.8.0"
+readonly SCRIPT_VERSION="2.9.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -2091,83 +2091,46 @@ EOF
     return 0
 }
 
-setup_port_forwarding() {
-    print_step "配置端口转发服务"
+verify_network_access() {
+    print_step "验证网络访问配置"
 
-    # 检查ServiceLB是否正常工作
-    print_info "检查K3s ServiceLB状态..."
-    local svclb_pods=$(k3s kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -c "svclb" 2>/dev/null | tr -d '\n' || echo "0")
+    # 检查NodePort端口状态
+    print_info "检查NodePort端口状态..."
 
-    # 确保变量是纯数字，如果不是则设为0
-    [[ "$svclb_pods" =~ ^[0-9]+$ ]] || svclb_pods=0
+    local ports_to_check=("$NODEPORT_HTTP" "$NODEPORT_HTTPS" "$NODEPORT_FEDERATION")
+    local port_names=("HTTP" "HTTPS" "Federation")
 
-    if [ "$svclb_pods" -gt 0 ]; then
-        print_success "检测到ServiceLB Pod，NodePort应该正常工作"
+    for i in "${!ports_to_check[@]}"; do
+        local port="${ports_to_check[$i]}"
+        local name="${port_names[$i]}"
 
-        # 验证端口监听
-        local retry_count=0
-        while [ $retry_count -lt 6 ]; do
-            if netstat -tuln 2>/dev/null | grep -q ":$NODEPORT_HTTPS "; then
-                print_success "NodePort $NODEPORT_HTTPS 已正常监听"
-                return 0
-            fi
-            print_info "等待NodePort端口监听... ($((retry_count + 1))/6)"
-            sleep 10
-            ((retry_count++))
-        done
-
-        print_warning "NodePort端口未监听，创建端口转发服务作为备用"
-    else
-        print_warning "未检测到ServiceLB Pod，创建端口转发服务"
-    fi
-
-    # 创建端口转发systemd服务
-    print_info "创建端口转发systemd服务..."
-
-    cat > /etc/systemd/system/matrix-port-forward.service << EOF
-[Unit]
-Description=Matrix Port Forward Service
-After=k3s.service
-Requires=k3s.service
-
-[Service]
-Type=simple
-User=root
-ExecStart=/usr/local/bin/kubectl port-forward -n kube-system svc/traefik $HTTPS_PORT:$HTTPS_PORT --address=0.0.0.0
-Restart=always
-RestartSec=5
-Environment=KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # 启用并启动服务
-    systemctl daemon-reload
-    systemctl enable matrix-port-forward.service
-    systemctl start matrix-port-forward.service
-
-    # 等待端口转发生效
-    print_info "等待端口转发服务启动..."
-    sleep 10
-
-    # 验证端口转发
-    if systemctl is-active --quiet matrix-port-forward.service; then
-        if netstat -tuln 2>/dev/null | grep -q ":$HTTPS_PORT "; then
-            print_success "端口转发服务启动成功，$HTTPS_PORT端口已监听"
+        if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+            print_success "$name NodePort $port 已监听"
         else
-            print_warning "端口转发服务已启动，但端口可能还未就绪"
+            print_warning "$name NodePort $port 未监听"
         fi
+    done
+
+    # 检查防火墙规则
+    print_info "检查防火墙端口转发规则..."
+
+    if iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "dpt:$HTTPS_PORT.*:$NODEPORT_HTTPS"; then
+        print_success "HTTPS端口转发规则已配置 ($HTTPS_PORT -> $NODEPORT_HTTPS)"
     else
-        print_error "端口转发服务启动失败"
-        systemctl status matrix-port-forward.service
-        return 1
+        print_warning "HTTPS端口转发规则可能未配置"
     fi
 
-    print_info "端口转发配置："
-    echo -e "  服务状态: $(systemctl is-active matrix-port-forward.service)"
-    echo -e "  转发规则: 0.0.0.0:$HTTPS_PORT -> traefik:$HTTPS_PORT"
-    echo -e "  访问地址: https://$WEB_HOST:$HTTPS_PORT"
+    if iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "dpt:$HTTP_PORT.*:$NODEPORT_HTTP"; then
+        print_success "HTTP端口转发规则已配置 ($HTTP_PORT -> $NODEPORT_HTTP)"
+    else
+        print_warning "HTTP端口转发规则可能未配置"
+    fi
+
+    print_info "网络访问配置："
+    echo -e "  HTTP访问: http://$WEB_HOST:$HTTP_PORT"
+    echo -e "  HTTPS访问: https://$WEB_HOST:$HTTPS_PORT"
+    echo -e "  联邦端口: $FEDERATION_PORT"
+    echo -e "  公网IP: $PUBLIC_IP"
 }
 
 
@@ -2724,11 +2687,8 @@ full_deployment() {
         print_warning "SSL证书创建失败，但继续部署..."
     fi
 
-    # 配置端口转发（如果需要）
-    if ! setup_port_forwarding; then
-        print_warning "端口转发配置失败，但继续部署..."
-        print_info "您可能需要手动配置网络访问"
-    fi
+    # 验证网络访问配置
+    verify_network_access
 
     # 创建管理员用户
     if ! create_admin_user; then
