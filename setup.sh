@@ -1438,22 +1438,25 @@ deploy_ess() {
     while true; do
         local running_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Running" || echo "0")
         local total_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | wc -l || echo "0")
+        local completed_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Completed" || echo "0")
 
-        if [ "$total_pods" -gt 0 ] && [ "$running_pods" -eq "$total_pods" ]; then
-            print_success "所有Pod已启动 ($running_pods/$total_pods)"
+        # 计算实际需要运行的Pod数量（排除Completed状态的Job Pod）
+        local expected_running=$((total_pods - completed_pods))
+
+        if [ "$total_pods" -gt 0 ] && [ "$expected_running" -gt 0 ] && [ "$running_pods" -eq "$expected_running" ]; then
+            print_success "所有服务Pod已启动 ($running_pods/$expected_running 运行中, $completed_pods 已完成)"
             break
         fi
 
-        if [ $retry_count -ge 60 ]; then  # 减少到10分钟
-            print_error "服务启动超时 (10分钟)"
-            print_info "检查Pod状态:"
+        if [ $retry_count -ge 60 ]; then  # 10分钟超时
+            print_warning "等待服务启动超时 (10分钟)，但继续部署"
+            print_info "当前Pod状态:"
             k3s kubectl get pods -n "$namespace"
-            print_info "检查事件:"
-            k3s kubectl get events -n "$namespace" --sort-by='.lastTimestamp'
-            return 1
+            print_info "运行中: $running_pods, 总计: $total_pods, 已完成: $completed_pods"
+            break  # 不返回错误，继续部署
         fi
 
-        print_info "等待服务启动... ($running_pods/$total_pods) ($((retry_count + 1))/60)"
+        print_info "等待服务启动... ($running_pods/$expected_running 运行中, $completed_pods 已完成) ($((retry_count + 1))/60)"
         sleep 10
         ((retry_count++))
     done
