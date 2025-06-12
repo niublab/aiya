@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="1.2.1"
+readonly SCRIPT_VERSION="1.2.2"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -664,40 +664,54 @@ show_config_summary() {
 install_k3s() {
     print_step "安装K3s集群"
 
-    # 检查是否已安装并正常运行
-    if command -v k3s &> /dev/null && systemctl is-active --quiet k3s; then
-        local k3s_version=""
-        if k3s --version &> /dev/null; then
-            k3s_version=$(k3s --version | head -n1 2>/dev/null || echo "未知版本")
-        fi
-        print_info "K3s已安装，版本: $k3s_version"
+    # 检查是否已安装
+    if command -v k3s &> /dev/null; then
+        print_info "检测到K3s已安装"
 
-        # 检查集群是否正常工作
-        if k3s kubectl get nodes &> /dev/null; then
-            print_info "K3s集群运行正常"
-            if confirm_action "是否重新安装K3s"; then
-                print_info "卸载现有K3s..."
-                if [[ -f /usr/local/bin/k3s-uninstall.sh ]]; then
-                    /usr/local/bin/k3s-uninstall.sh || true
-                else
-                    print_warning "未找到卸载脚本，尝试手动清理..."
-                    systemctl stop k3s || true
-                    systemctl disable k3s || true
-                    rm -f /usr/local/bin/k3s /usr/local/bin/kubectl /usr/local/bin/crictl /usr/local/bin/ctr
-                    rm -f /usr/local/bin/k3s-killall.sh /usr/local/bin/k3s-uninstall.sh
-                    rm -f /etc/systemd/system/k3s.service /etc/systemd/system/k3s.service.env
-                    systemctl daemon-reload
-                fi
-            else
-                print_success "使用现有K3s安装"
+        # 检查服务状态
+        if systemctl is-active --quiet k3s; then
+            # 检查集群是否正常工作
+            if k3s kubectl get nodes &> /dev/null; then
+                local k3s_version=$(k3s --version | head -n1 2>/dev/null || echo "未知版本")
+                print_success "K3s集群运行正常，版本: $k3s_version"
                 return 0
+            else
+                print_warning "K3s服务运行但集群异常，需要重新安装"
             fi
         else
-            print_warning "K3s已安装但集群无法访问，将重新安装"
-            if [[ -f /usr/local/bin/k3s-uninstall.sh ]]; then
-                /usr/local/bin/k3s-uninstall.sh || true
+            print_warning "K3s服务未运行，检查是否需要重新安装"
+
+            # 尝试启动服务
+            print_info "尝试启动K3s服务..."
+            if systemctl start k3s && sleep 10 && systemctl is-active --quiet k3s; then
+                if k3s kubectl get nodes &> /dev/null; then
+                    print_success "K3s服务启动成功"
+                    return 0
+                fi
             fi
+
+            print_warning "K3s服务启动失败，需要重新安装"
         fi
+
+        # 清理有问题的K3s安装
+        print_info "清理有问题的K3s安装..."
+        systemctl stop k3s 2>/dev/null || true
+        systemctl disable k3s 2>/dev/null || true
+
+        if [[ -f /usr/local/bin/k3s-uninstall.sh ]]; then
+            /usr/local/bin/k3s-uninstall.sh || true
+        else
+            print_info "手动清理K3s组件..."
+            rm -f /usr/local/bin/k3s /usr/local/bin/kubectl /usr/local/bin/crictl /usr/local/bin/ctr || true
+            rm -f /usr/local/bin/k3s-killall.sh /usr/local/bin/k3s-uninstall.sh || true
+            rm -f /etc/systemd/system/k3s.service* || true
+            rm -rf /var/lib/rancher/k3s || true
+            rm -rf /etc/rancher/k3s || true
+            systemctl daemon-reload || true
+        fi
+
+        # 等待清理完成
+        sleep 5
     fi
 
     print_info "下载并安装K3s $K3S_VERSION..."
@@ -1577,19 +1591,29 @@ cleanup_ess() {
 
     local namespace="ess"
 
-    print_info "卸载ESS Helm Chart..."
-    helm uninstall ess -n "$namespace" || true
+    # 检查helm是否可用
+    if command -v helm &> /dev/null; then
+        print_info "卸载ESS Helm Chart..."
+        helm uninstall ess -n "$namespace" 2>/dev/null || true
+    else
+        print_warning "Helm命令不可用，跳过Helm卸载"
+    fi
 
-    print_info "等待资源清理..."
-    sleep 10
+    # 检查k3s kubectl是否可用
+    if command -v k3s &> /dev/null && k3s kubectl version &> /dev/null; then
+        print_info "等待资源清理..."
+        sleep 10
 
-    print_info "删除ESS命名空间..."
-    k3s kubectl delete namespace "$namespace" --timeout=60s || true
+        print_info "删除ESS命名空间..."
+        k3s kubectl delete namespace "$namespace" --timeout=60s 2>/dev/null || true
 
-    # 强制删除命名空间（如果卡住）
-    if k3s kubectl get namespace "$namespace" &> /dev/null; then
-        print_info "强制删除命名空间..."
-        k3s kubectl patch namespace "$namespace" -p '{"metadata":{"finalizers":[]}}' --type=merge || true
+        # 强制删除命名空间（如果卡住）
+        if k3s kubectl get namespace "$namespace" &> /dev/null; then
+            print_info "强制删除命名空间..."
+            k3s kubectl patch namespace "$namespace" -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
+        fi
+    else
+        print_warning "K3s不可用，跳过Kubernetes资源清理"
     fi
 
     print_success "ESS清理完成"
@@ -1606,9 +1630,14 @@ cleanup_applications() {
     cleanup_ess
 
     # 清理cert-manager
-    print_info "卸载cert-manager..."
-    helm uninstall cert-manager -n cert-manager || true
-    k3s kubectl delete namespace cert-manager || true
+    if command -v helm &> /dev/null; then
+        print_info "卸载cert-manager..."
+        helm uninstall cert-manager -n cert-manager 2>/dev/null || true
+    fi
+
+    if command -v k3s &> /dev/null && k3s kubectl version &> /dev/null; then
+        k3s kubectl delete namespace cert-manager --timeout=60s 2>/dev/null || true
+    fi
 
     print_success "应用清理完成"
 }
@@ -1765,6 +1794,8 @@ cleanup_complete() {
     print_success "完全清理完成"
     print_info "建议重启系统以确保所有更改生效"
 }
+
+
 
 # ==================== 完整部署流程 ====================
 
