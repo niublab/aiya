@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.3.0"
+readonly SCRIPT_VERSION="2.3.1"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -2194,38 +2194,24 @@ create_admin_user() {
     # 尝试多种创建方式
     local user_created=false
 
-    # 方法1: 使用--yes参数
-    print_info "尝试方法1: 使用--yes参数..."
+    # 方法1: 使用正确的命令格式（基于帮助文档）
+    print_info "尝试方法1: 使用--yes参数的正确格式..."
     if k3s kubectl exec -n "$namespace" "$mas_pod" -- \
         mas-cli manage register-user \
         --yes \
-        --username "$ADMIN_USERNAME" \
+        "$ADMIN_USERNAME" \
         --password "$ADMIN_PASSWORD" \
-        --admin 2>/dev/null; then
+        --admin; then
         print_success "管理员用户创建完成 (方法1)"
         user_created=true
     fi
 
-    # 方法2: 不使用--yes参数
+    # 方法2: 不使用--yes，允许交互式创建（但可能在脚本中失败）
     if [ "$user_created" = false ]; then
-        print_info "尝试方法2: 不使用--yes参数..."
-        if k3s kubectl exec -n "$namespace" "$mas_pod" -- \
-            mas-cli manage register-user \
-            --username "$ADMIN_USERNAME" \
-            --password "$ADMIN_PASSWORD" \
-            --admin 2>/dev/null; then
+        print_info "尝试方法2: 交互式创建..."
+        if echo -e "$ADMIN_USERNAME\n$ADMIN_PASSWORD\ny\ny" | k3s kubectl exec -i -n "$namespace" "$mas_pod" -- \
+            mas-cli manage register-user; then
             print_success "管理员用户创建完成 (方法2)"
-            user_created=true
-        fi
-    fi
-
-    # 方法3: 使用环境变量
-    if [ "$user_created" = false ]; then
-        print_info "尝试方法3: 使用环境变量..."
-        if k3s kubectl exec -n "$namespace" "$mas_pod" -- \
-            env MAS_USERNAME="$ADMIN_USERNAME" MAS_PASSWORD="$ADMIN_PASSWORD" \
-            mas-cli manage register-user --admin 2>/dev/null; then
-            print_success "管理员用户创建完成 (方法3)"
             user_created=true
         fi
     fi
