@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.1.1"
+readonly SCRIPT_VERSION="2.1.2"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1774,8 +1774,13 @@ EOF
     print_info "等待证书申请完成..."
     local retry_count=0
     while true; do
-        local ready_certs=$(k3s kubectl get certificates -n "$namespace" --no-headers 2>/dev/null | grep -c "True" || echo "0")
-        local total_certs=$(k3s kubectl get certificates -n "$namespace" --no-headers 2>/dev/null | wc -l || echo "0")
+        # 修复换行符问题：使用tr删除换行符，确保返回纯数字
+        local ready_certs=$(k3s kubectl get certificates -n "$namespace" --no-headers 2>/dev/null | grep -c "True" 2>/dev/null | tr -d '\n' || echo "0")
+        local total_certs=$(k3s kubectl get certificates -n "$namespace" --no-headers 2>/dev/null | wc -l 2>/dev/null | tr -d '\n' || echo "0")
+
+        # 确保变量是纯数字，如果不是则设为0
+        [[ "$ready_certs" =~ ^[0-9]+$ ]] || ready_certs=0
+        [[ "$total_certs" =~ ^[0-9]+$ ]] || total_certs=0
 
         if [ "$total_certs" -gt 0 ] && [ "$ready_certs" -eq "$total_certs" ]; then
             print_success "所有证书申请完成 ($ready_certs/$total_certs)"
