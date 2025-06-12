@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="1.2.3"
+readonly SCRIPT_VERSION="1.2.4"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1516,6 +1516,8 @@ create_admin_user() {
             print_error "等待MAS Pod超时"
             print_info "当前Pod状态:"
             k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name=matrix-authentication-service
+            print_warning "MAS Pod未就绪，跳过用户创建"
+            print_info "您可以稍后手动创建管理员用户"
             return 1
         fi
 
@@ -1991,31 +1993,77 @@ full_deployment() {
     deploy_ess
 
     # 创建管理员用户
-    create_admin_user
+    if ! create_admin_user; then
+        print_warning "管理员用户创建失败，但部署继续..."
+        print_info "您可以稍后手动创建管理员用户"
+    fi
 
     # 验证部署
-    verify_deployment
+    if ! verify_deployment; then
+        print_warning "部署验证失败，但基础服务可能已正常运行"
+    fi
 
     # 显示完成信息
+    show_deployment_summary
+}
+
+show_deployment_summary() {
     print_header "部署完成"
 
-    echo -e "${GREEN}Matrix ESS Community 部署成功！${NC}"
+    echo -e "${GREEN}Matrix ESS Community 部署完成！${NC}"
     echo
+
+    # 检查服务状态
+    print_info "检查服务状态..."
+    local namespace="ess"
+    local running_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+    local total_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | wc -l || echo "0")
+
+    if [ "$total_pods" -gt 0 ]; then
+        echo -e "${WHITE}服务状态: $running_pods/$total_pods 个服务运行中${NC}"
+        if [ "$running_pods" -eq "$total_pods" ]; then
+            echo -e "${GREEN}✅ 所有服务运行正常${NC}"
+        else
+            echo -e "${YELLOW}⚠️  部分服务可能还在启动中${NC}"
+        fi
+    else
+        echo -e "${RED}❌ 未检测到ESS服务${NC}"
+    fi
+    echo
+
     echo -e "${WHITE}访问信息:${NC}"
     echo -e "  Element Web: https://$WEB_HOST:$HTTPS_PORT"
     echo -e "  认证服务: https://$AUTH_HOST:$HTTPS_PORT"
     echo -e "  RTC服务: https://$RTC_HOST:$HTTPS_PORT"
     echo -e "  Synapse: https://$SYNAPSE_HOST:$HTTPS_PORT"
+    echo -e "  服务器名: $SERVER_NAME"
     echo
+
     echo -e "${WHITE}管理员账户:${NC}"
-    echo -e "  用户名: $ADMIN_USERNAME"
-    echo -e "  密码: $ADMIN_PASSWORD"
+    if [[ -n "$ADMIN_USERNAME" && -n "$ADMIN_PASSWORD" ]]; then
+        echo -e "  用户名: $ADMIN_USERNAME"
+        echo -e "  密码: $ADMIN_PASSWORD"
+        echo -e "  Matrix ID: @$ADMIN_USERNAME:$SERVER_NAME"
+    else
+        echo -e "  ${YELLOW}管理员用户未创建，请手动创建${NC}"
+    fi
     echo
+
     echo -e "${WHITE}配置文件:${NC}"
     echo -e "  配置文件: $INSTALL_DIR/matrix-config.env"
     echo -e "  ESS配置: $INSTALL_DIR/ess-values.yaml"
+    if [[ -f "$INSTALL_DIR/passwords.txt" ]]; then
+        echo -e "  密码文件: $INSTALL_DIR/passwords.txt"
+    fi
     echo
-    echo -e "${YELLOW}请妥善保存管理员密码！${NC}"
+
+    echo -e "${WHITE}后续步骤:${NC}"
+    echo -e "  1. 访问 https://$WEB_HOST:$HTTPS_PORT 测试登录"
+    echo -e "  2. 使用联邦测试器验证: https://federationtester.matrix.org/#$SERVER_NAME"
+    echo -e "  3. 如需管理服务，重新运行脚本选择服务管理"
+    echo
+
+    echo -e "${YELLOW}请妥善保存管理员密码和配置文件！${NC}"
 
     read -p "按回车键继续..."
 }
