@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="1.2.5"
+readonly SCRIPT_VERSION="1.3.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -856,18 +856,18 @@ diagnose_and_fix_k3s() {
     # 尝试多种安装方法
     print_info "尝试不同的K3s安装方法..."
 
-    # 方法1: 完全禁用网络组件
-    print_info "方法1: 禁用网络组件安装..."
+    # 方法1: 使用默认配置（推荐）
+    print_info "方法1: 使用K3s默认配置..."
     systemctl stop k3s 2>/dev/null || true
     /usr/local/bin/k3s-uninstall.sh 2>/dev/null || true
     sleep 3
 
     if env -i PATH="$PATH" \
         INSTALL_K3S_VERSION="$K3S_VERSION" \
-        INSTALL_K3S_EXEC="--write-kubeconfig-mode=644 --disable=traefik --disable=servicelb --disable=metrics-server" \
+        INSTALL_K3S_EXEC="--write-kubeconfig-mode=644" \
         bash -c 'curl -sfL https://get.k3s.io | sh -' && \
         sleep 10 && systemctl is-active --quiet k3s; then
-        print_success "K3s安装成功 (禁用网络组件)"
+        print_success "K3s安装成功 (默认配置)"
         return 0
     fi
 
@@ -919,13 +919,30 @@ configure_traefik() {
         return 1
     fi
 
-    # 检查Traefik deployment是否存在
+    # 检查Traefik是否已启用（K3s默认启用）
     print_info "检查Traefik状态..."
-    if k3s kubectl get deployment traefik -n kube-system &> /dev/null; then
-        print_info "检测到Traefik deployment已存在，配置端口映射..."
 
-        # 创建Traefik配置
-        cat << EOF | k3s kubectl apply -f -
+    # 等待Traefik Pod启动
+    local retry_count=0
+    while ! k3s kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik --no-headers 2>/dev/null | grep -q "Running"; do
+        if [ $retry_count -ge 30 ]; then
+            print_warning "Traefik Pod未在5分钟内启动，可能被禁用"
+            break
+        fi
+        print_info "等待Traefik Pod启动... ($((retry_count + 1))/30)"
+        sleep 10
+        ((retry_count++))
+    done
+
+    # 检查Traefik服务是否存在
+    if k3s kubectl get service traefik -n kube-system &> /dev/null; then
+        print_success "检测到K3s内置Traefik服务"
+
+        # 如果需要自定义端口，创建HelmChartConfig
+        if [[ "$HTTP_PORT" != "80" || "$HTTPS_PORT" != "443" ]]; then
+            print_info "配置Traefik自定义端口映射..."
+
+            cat << EOF | k3s kubectl apply -f -
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -935,67 +952,25 @@ spec:
   valuesContent: |-
     ports:
       web:
-        port: 8000
         exposedPort: $HTTP_PORT
-        expose: true
-        protocol: TCP
       websecure:
-        port: 8443
         exposedPort: $HTTPS_PORT
-        expose: true
-        protocol: TCP
-        tls:
-          enabled: true
     service:
       type: LoadBalancer
-    additionalArguments:
-      - "--entrypoints.web.address=:8000"
-      - "--entrypoints.websecure.address=:8443"
-      - "--providers.kubernetescrd"
-      - "--providers.kubernetesingress"
-      - "--certificatesresolvers.default.acme.email=$CERT_EMAIL"
-      - "--certificatesresolvers.default.acme.storage=/data/acme.json"
-      - "--certificatesresolvers.default.acme.caserver=https://acme-v02.api.letsencrypt.org/directory"
 EOF
 
-        # 等待Traefik重新配置
-        print_info "等待Traefik重新配置..."
-        sleep 30
+            print_info "等待Traefik重新配置..."
+            sleep 30
 
-        # 重启Traefik
-        print_info "重启Traefik服务..."
-        k3s kubectl rollout restart deployment traefik -n kube-system
-
-        # 等待Traefik就绪
-        print_info "等待Traefik就绪..."
-        k3s kubectl rollout status deployment traefik -n kube-system --timeout=300s
+            # 检查Traefik是否重新启动
+            k3s kubectl rollout status deployment traefik -n kube-system --timeout=300s || true
+        fi
 
         print_success "Traefik配置完成"
     else
-        print_warning "Traefik deployment不存在，手动安装Traefik..."
-
-        # 删除可能存在的HelmChartConfig
-        print_info "清理现有配置..."
-        k3s kubectl delete helmchartconfig traefik -n kube-system 2>/dev/null || true
-
-        # 手动安装Traefik
-        print_info "添加Traefik Helm仓库..."
-        helm repo add traefik https://traefik.github.io/charts || true
-        helm repo update || true
-
-        print_info "安装Traefik..."
-        helm install traefik traefik/traefik \
-            --namespace kube-system \
-            --set ports.web.exposedPort=$HTTP_PORT \
-            --set ports.websecure.exposedPort=$HTTPS_PORT \
-            --set service.type=LoadBalancer \
-            --timeout=300s || true
-
-        # 等待Traefik启动
-        print_info "等待Traefik启动..."
-        k3s kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=traefik -n kube-system --timeout=300s || true
-
-        print_success "Traefik手动安装完成"
+        print_warning "未检测到Traefik服务，可能已被禁用"
+        print_info "ESS需要Ingress控制器，建议重新安装K3s并启用Traefik"
+        return 1
     fi
 }
 
@@ -1344,7 +1319,7 @@ generate_ess_values() {
     print_info "生成ESS values文件: $values_file"
     print_info "基于官方schema生成最小化配置..."
 
-    # 基于官方quick-setup-hostnames.yaml的最小化配置
+    # 基于官方quick-setup-hostnames.yaml的配置，添加必要的Ingress配置
     cat > "$values_file" << EOF
 # Matrix ESS Community 配置文件
 # 生成时间: $(date)
@@ -1355,10 +1330,20 @@ generate_ess_values() {
 # 服务器名称 (必需)
 serverName: "$SERVER_NAME"
 
+# 全局Ingress配置
+ingress:
+  class: traefik
+  tls:
+    enabled: true
+
 # Element Web配置
 elementWeb:
   ingress:
     host: "$WEB_HOST"
+    className: traefik
+    tls:
+      enabled: true
+      secretName: "$WEB_HOST-tls"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
 
@@ -1366,6 +1351,10 @@ elementWeb:
 matrixAuthenticationService:
   ingress:
     host: "$AUTH_HOST"
+    className: traefik
+    tls:
+      enabled: true
+      secretName: "$AUTH_HOST-tls"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
 
@@ -1373,6 +1362,10 @@ matrixAuthenticationService:
 matrixRTC:
   ingress:
     host: "$RTC_HOST"
+    className: traefik
+    tls:
+      enabled: true
+      secretName: "$RTC_HOST-tls"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
 
@@ -1380,6 +1373,10 @@ matrixRTC:
 synapse:
   ingress:
     host: "$SYNAPSE_HOST"
+    className: traefik
+    tls:
+      enabled: true
+      secretName: "$SYNAPSE_HOST-tls"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
 EOF
