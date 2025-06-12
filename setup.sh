@@ -10,9 +10,9 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="1.1.0"
+readonly SCRIPT_VERSION="1.2.1"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
-readonly SCRIPT_DATE="2025-01-06"
+readonly SCRIPT_DATE="2025-01-28"
 
 # 版本信息 - 基于官方最新稳定版本
 readonly ESS_VERSION="25.6.1"
@@ -704,7 +704,7 @@ install_k3s() {
 
     # 设置K3s安装参数
     export INSTALL_K3S_VERSION="$K3S_VERSION"
-    export INSTALL_K3S_EXEC="--disable=traefik --disable=servicelb --write-kubeconfig-mode=644 --tls-san=127.0.0.1 --tls-san=localhost"
+    export INSTALL_K3S_EXEC="--write-kubeconfig-mode=644 --tls-san=127.0.0.1 --tls-san=localhost --tls-san=$PUBLIC_IP"
 
     # 下载并执行K3s安装脚本
     curl -sfL https://get.k3s.io | sh -
@@ -772,6 +772,65 @@ install_k3s() {
     fi
 
     print_success "K3s安装完成"
+}
+
+configure_traefik() {
+    print_step "配置Traefik"
+
+    # 设置Kubernetes环境
+    if ! setup_k8s_env; then
+        return 1
+    fi
+
+    print_info "配置Traefik端口映射..."
+
+    # 创建Traefik配置
+    cat << EOF | k3s kubectl apply -f -
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    ports:
+      web:
+        port: 8000
+        exposedPort: $HTTP_PORT
+        expose: true
+        protocol: TCP
+      websecure:
+        port: 8443
+        exposedPort: $HTTPS_PORT
+        expose: true
+        protocol: TCP
+        tls:
+          enabled: true
+    service:
+      type: LoadBalancer
+    additionalArguments:
+      - "--entrypoints.web.address=:8000"
+      - "--entrypoints.websecure.address=:8443"
+      - "--providers.kubernetescrd"
+      - "--providers.kubernetesingress"
+      - "--certificatesresolvers.default.acme.email=$CERT_EMAIL"
+      - "--certificatesresolvers.default.acme.storage=/data/acme.json"
+      - "--certificatesresolvers.default.acme.caserver=https://acme-v02.api.letsencrypt.org/directory"
+EOF
+
+    # 等待Traefik重新配置
+    print_info "等待Traefik重新配置..."
+    sleep 30
+
+    # 重启Traefik
+    print_info "重启Traefik服务..."
+    k3s kubectl rollout restart deployment traefik -n kube-system
+
+    # 等待Traefik就绪
+    print_info "等待Traefik就绪..."
+    k3s kubectl rollout status deployment traefik -n kube-system --timeout=300s
+
+    print_success "Traefik配置完成"
 }
 
 install_helm() {
@@ -1017,8 +1076,18 @@ verify_ess_chart() {
     # 使用helm show chart验证OCI chart是否可用
     local oci_chart="oci://ghcr.io/element-hq/ess-helm/matrix-stack"
 
+    print_info "检查ESS Chart版本 $ESS_VERSION..."
     if helm show chart "$oci_chart" --version "$ESS_VERSION" &> /dev/null; then
         print_success "ESS Chart版本 $ESS_VERSION 验证成功"
+
+        # 获取Chart详细信息
+        local chart_info=$(helm show chart "$oci_chart" --version "$ESS_VERSION" 2>/dev/null)
+        if [[ -n "$chart_info" ]]; then
+            local chart_version=$(echo "$chart_info" | grep "^version:" | awk '{print $2}')
+            local app_version=$(echo "$chart_info" | grep "^appVersion:" | awk '{print $2}')
+            print_info "Chart版本: $chart_version"
+            print_info "应用版本: $app_version"
+        fi
         return 0
     else
         print_warning "无法验证ESS Chart版本 $ESS_VERSION，尝试获取最新版本..."
@@ -1026,12 +1095,78 @@ verify_ess_chart() {
         # 尝试不指定版本获取最新版本
         if helm show chart "$oci_chart" &> /dev/null; then
             print_info "ESS Chart可用，将使用最新版本"
+
+            # 获取最新版本信息
+            local latest_info=$(helm show chart "$oci_chart" 2>/dev/null)
+            if [[ -n "$latest_info" ]]; then
+                local latest_version=$(echo "$latest_info" | grep "^version:" | awk '{print $2}')
+                print_info "最新Chart版本: $latest_version"
+            fi
             return 0
         else
             print_error "无法访问ESS Chart，请检查网络连接"
+            print_info "请确认："
+            print_info "  1. 网络连接正常"
+            print_info "  2. 可以访问 ghcr.io"
+            print_info "  3. Helm已正确安装"
             return 1
         fi
     fi
+}
+
+check_latest_versions() {
+    print_step "检查组件最新版本"
+
+    print_info "检查各组件最新版本信息..."
+
+    # 检查ESS最新版本
+    print_info "检查ESS最新版本..."
+    local oci_chart="oci://ghcr.io/element-hq/ess-helm/matrix-stack"
+    if helm show chart "$oci_chart" &> /dev/null; then
+        local latest_ess=$(helm show chart "$oci_chart" 2>/dev/null | grep "^version:" | awk '{print $2}')
+        if [[ -n "$latest_ess" ]]; then
+            if [[ "$latest_ess" == "$ESS_VERSION" ]]; then
+                print_success "ESS版本 $ESS_VERSION 是最新版本"
+            else
+                print_warning "ESS有新版本可用: $latest_ess (当前: $ESS_VERSION)"
+            fi
+        fi
+    fi
+
+    # 检查K3s最新版本
+    print_info "检查K3s最新版本..."
+    local latest_k3s=$(curl -s https://api.github.com/repos/k3s-io/k3s/releases/latest | grep '"tag_name":' | cut -d'"' -f4 2>/dev/null || echo "")
+    if [[ -n "$latest_k3s" ]]; then
+        if [[ "$latest_k3s" == "$K3S_VERSION" ]]; then
+            print_success "K3s版本 $K3S_VERSION 是最新版本"
+        else
+            print_warning "K3s有新版本可用: $latest_k3s (当前: $K3S_VERSION)"
+        fi
+    fi
+
+    # 检查Helm最新版本
+    print_info "检查Helm最新版本..."
+    local latest_helm=$(curl -s https://api.github.com/repos/helm/helm/releases/latest | grep '"tag_name":' | cut -d'"' -f4 2>/dev/null || echo "")
+    if [[ -n "$latest_helm" ]]; then
+        if [[ "$latest_helm" == "$HELM_VERSION" ]]; then
+            print_success "Helm版本 $HELM_VERSION 是最新版本"
+        else
+            print_warning "Helm有新版本可用: $latest_helm (当前: $HELM_VERSION)"
+        fi
+    fi
+
+    # 检查cert-manager最新版本
+    print_info "检查cert-manager最新版本..."
+    local latest_certmgr=$(curl -s https://api.github.com/repos/cert-manager/cert-manager/releases/latest | grep '"tag_name":' | cut -d'"' -f4 2>/dev/null || echo "")
+    if [[ -n "$latest_certmgr" ]]; then
+        if [[ "$latest_certmgr" == "$CERT_MANAGER_VERSION" ]]; then
+            print_success "cert-manager版本 $CERT_MANAGER_VERSION 是最新版本"
+        else
+            print_warning "cert-manager有新版本可用: $latest_certmgr (当前: $CERT_MANAGER_VERSION)"
+        fi
+    fi
+
+    print_success "版本检查完成"
 }
 
 generate_ess_values() {
@@ -1041,53 +1176,70 @@ generate_ess_values() {
     local issuer_name="letsencrypt-$CERT_ENVIRONMENT"
 
     print_info "生成ESS values文件: $values_file"
+    print_info "基于官方schema生成最小化配置..."
 
+    # 基于官方quick-setup-hostnames.yaml的最小化配置
     cat > "$values_file" << EOF
 # Matrix ESS Community 配置文件
 # 生成时间: $(date)
 # 脚本版本: $SCRIPT_VERSION
 # ESS版本: $ESS_VERSION
+# 基于官方 quick-setup-hostnames.yaml 模板
 
-# 服务器名称
+# 服务器名称 (必需)
 serverName: "$SERVER_NAME"
 
 # Element Web配置
 elementWeb:
-  enabled: true
   ingress:
     host: "$WEB_HOST"
+    annotations:
+      cert-manager.io/cluster-issuer: "$issuer_name"
 
 # Matrix Authentication Service配置
 matrixAuthenticationService:
-  enabled: true
   ingress:
     host: "$AUTH_HOST"
+    annotations:
+      cert-manager.io/cluster-issuer: "$issuer_name"
 
 # Matrix RTC配置
 matrixRTC:
-  enabled: true
   ingress:
     host: "$RTC_HOST"
+    annotations:
+      cert-manager.io/cluster-issuer: "$issuer_name"
 
 # Synapse配置
 synapse:
-  enabled: true
   ingress:
     host: "$SYNAPSE_HOST"
-
-# cert-manager配置
-certManager:
-  clusterIssuer: "$issuer_name"
-
-# PostgreSQL配置
-postgresql:
-  enabled: true
-  auth:
-    postgresPassword: "$(generate_password)"
-    database: "synapse"
+    annotations:
+      cert-manager.io/cluster-issuer: "$issuer_name"
 EOF
 
+    # 保存管理员密码到单独文件
+    cat > "$INSTALL_DIR/passwords.txt" << EOF
+# Matrix ESS Community 密码文件
+# 生成时间: $(date)
+# 请妥善保管此文件
+
+管理员用户名: $ADMIN_USERNAME
+管理员密码: $ADMIN_PASSWORD
+Matrix ID: @$ADMIN_USERNAME:$SERVER_NAME
+
+# 访问地址
+Element Web: https://$WEB_HOST:$HTTPS_PORT
+认证服务: https://$AUTH_HOST:$HTTPS_PORT
+RTC服务: https://$RTC_HOST:$HTTPS_PORT
+Synapse: https://$SYNAPSE_HOST:$HTTPS_PORT
+EOF
+
+    chmod 600 "$INSTALL_DIR/passwords.txt"
+
     print_success "ESS配置文件生成完成: $values_file"
+    print_info "密码文件已保存到: $INSTALL_DIR/passwords.txt"
+    print_info "使用官方最小化配置，PostgreSQL将自动配置"
 }
 
 deploy_ess() {
@@ -1099,7 +1251,7 @@ deploy_ess() {
     fi
 
     local values_file="$INSTALL_DIR/ess-values.yaml"
-    local namespace="matrix"
+    local namespace="ess"
     local oci_chart="oci://ghcr.io/element-hq/ess-helm/matrix-stack"
 
     # 检查values文件是否存在
@@ -1109,15 +1261,15 @@ deploy_ess() {
     fi
 
     # 创建命名空间
-    print_info "创建Matrix命名空间..."
+    print_info "创建ESS命名空间..."
     if ! k3s kubectl create namespace "$namespace" --dry-run=client -o yaml | k3s kubectl apply -f -; then
-        print_error "创建Matrix命名空间失败"
+        print_error "创建ESS命名空间失败"
         return 1
     fi
 
     # 部署ESS使用OCI registry
     print_info "部署Element Server Suite (使用OCI registry)..."
-    local helm_cmd="helm install matrix-ess $oci_chart --namespace $namespace --values $values_file --wait --timeout=1200s"
+    local helm_cmd="helm install ess $oci_chart --namespace $namespace --values $values_file --wait --timeout=1800s"
 
     # 尝试使用指定版本
     if helm show chart "$oci_chart" --version "$ESS_VERSION" &> /dev/null; then
@@ -1127,20 +1279,31 @@ deploy_ess() {
         print_warning "指定版本 $ESS_VERSION 不可用，使用最新版本"
     fi
 
+    print_info "执行部署命令: $helm_cmd"
     if ! eval "$helm_cmd"; then
         print_error "ESS部署失败"
         print_info "查看部署状态:"
         k3s kubectl get pods -n "$namespace" || true
         print_info "查看事件:"
         k3s kubectl get events -n "$namespace" --sort-by='.lastTimestamp' || true
+        print_info "查看Helm状态:"
+        helm status ess -n "$namespace" || true
         return 1
     fi
 
     # 等待所有Pod启动
     print_info "等待所有服务启动..."
     local retry_count=0
-    while ! k3s kubectl get pods -n "$namespace" | grep -q "Running"; do
-        if [ $retry_count -ge 120 ]; then
+    while true; do
+        local running_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+        local total_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | wc -l || echo "0")
+
+        if [ "$total_pods" -gt 0 ] && [ "$running_pods" -eq "$total_pods" ]; then
+            print_success "所有Pod已启动 ($running_pods/$total_pods)"
+            break
+        fi
+
+        if [ $retry_count -ge 180 ]; then
             print_error "服务启动超时"
             print_info "检查Pod状态:"
             k3s kubectl get pods -n "$namespace"
@@ -1148,16 +1311,21 @@ deploy_ess() {
             k3s kubectl get events -n "$namespace" --sort-by='.lastTimestamp'
             return 1
         fi
-        print_info "等待服务启动... ($((retry_count + 1))/120)"
-        sleep 5
+
+        print_info "等待服务启动... ($running_pods/$total_pods) ($((retry_count + 1))/180)"
+        sleep 10
         ((retry_count++))
     done
 
-    # 等待所有Pod就绪
-    if ! k3s kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=matrix-ess -n "$namespace" --timeout=600s; then
-        print_warning "部分Pod可能未就绪，检查状态:"
-        k3s kubectl get pods -n "$namespace"
-    fi
+    # 等待关键服务就绪
+    print_info "等待关键服务就绪..."
+    local services=("postgresql" "synapse" "matrix-authentication-service")
+    for service in "${services[@]}"; do
+        print_info "等待 $service 就绪..."
+        if ! k3s kubectl wait --for=condition=ready pod -l app.kubernetes.io/name="$service" -n "$namespace" --timeout=300s; then
+            print_warning "$service 可能未完全就绪，继续检查其他服务"
+        fi
+    done
 
     print_success "ESS部署完成"
 }
@@ -1165,34 +1333,75 @@ deploy_ess() {
 create_admin_user() {
     print_step "创建管理员用户"
 
-    local namespace="matrix"
-    local mas_pod=$(k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name=matrix-authentication-service -o jsonpath='{.items[0].metadata.name}')
+    local namespace="ess"
 
-    if [[ -z "$mas_pod" ]]; then
-        print_error "找不到MAS Pod"
-        return 1
-    fi
+    # 等待MAS Pod就绪
+    print_info "等待Matrix Authentication Service就绪..."
+    local retry_count=0
+    while true; do
+        local mas_pod=$(k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name=matrix-authentication-service --no-headers 2>/dev/null | grep "Running" | head -n1 | awk '{print $1}')
 
+        if [[ -n "$mas_pod" ]]; then
+            print_success "找到MAS Pod: $mas_pod"
+            break
+        fi
+
+        if [ $retry_count -ge 60 ]; then
+            print_error "等待MAS Pod超时"
+            print_info "当前Pod状态:"
+            k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name=matrix-authentication-service
+            return 1
+        fi
+
+        print_info "等待MAS Pod启动... ($((retry_count + 1))/60)"
+        sleep 5
+        ((retry_count++))
+    done
+
+    # 等待MAS服务完全启动
+    print_info "等待MAS服务完全启动..."
+    sleep 30
+
+    # 创建管理员用户
     print_info "在MAS中创建管理员用户..."
-    k3s kubectl exec -n "$namespace" "$mas_pod" -- \
-        mas-cli manage register-user \
-        --username "$ADMIN_USERNAME" \
-        --password "$ADMIN_PASSWORD" \
-        --admin
-
-    print_success "管理员用户创建完成"
     print_info "用户名: $ADMIN_USERNAME"
     print_info "密码: $ADMIN_PASSWORD"
+
+    # 使用非交互式方式创建用户
+    if k3s kubectl exec -n "$namespace" "$mas_pod" -- \
+        mas-cli manage register-user \
+        --yes \
+        --username "$ADMIN_USERNAME" \
+        --password "$ADMIN_PASSWORD" \
+        --admin; then
+        print_success "管理员用户创建完成"
+    else
+        print_warning "自动创建用户失败，尝试交互式创建..."
+        print_info "请手动执行以下命令创建管理员用户:"
+        echo "kubectl exec -n $namespace -it $mas_pod -- mas-cli manage register-user"
+        echo "然后按提示输入用户名: $ADMIN_USERNAME"
+        echo "密码: $ADMIN_PASSWORD"
+        echo "并选择设置为管理员"
+
+        if confirm_action "是否现在手动创建用户"; then
+            k3s kubectl exec -n "$namespace" -it "$mas_pod" -- mas-cli manage register-user
+        fi
+    fi
+
+    print_info "管理员账户信息:"
+    print_info "  用户名: $ADMIN_USERNAME"
+    print_info "  密码: $ADMIN_PASSWORD"
+    print_info "  Matrix ID: @$ADMIN_USERNAME:$SERVER_NAME"
 }
 
 verify_deployment() {
     print_step "验证部署"
 
-    local namespace="matrix"
+    local namespace="ess"
 
     # 检查Pod状态
     print_info "检查Pod状态..."
-    k3s kubectl get pods -n "$namespace"
+    k3s kubectl get pods -n "$namespace" -o wide
 
     # 检查服务状态
     print_info "检查服务状态..."
@@ -1206,19 +1415,75 @@ verify_deployment() {
     print_info "检查证书状态..."
     k3s kubectl get certificates -n "$namespace"
 
-    # 测试服务连通性
-    print_info "测试服务连通性..."
-    local services=("$WEB_HOST" "$AUTH_HOST" "$RTC_HOST" "$SYNAPSE_HOST")
+    # 检查ClusterIssuer状态
+    print_info "检查ClusterIssuer状态..."
+    k3s kubectl get clusterissuer
 
-    for service in "${services[@]}"; do
-        if curl -s --connect-timeout 5 "https://$service" > /dev/null; then
-            print_success "$service - 连接正常"
+    # 检查关键服务健康状态
+    print_info "检查关键服务健康状态..."
+    local critical_services=("postgresql" "synapse" "matrix-authentication-service")
+
+    for service in "${critical_services[@]}"; do
+        local pod_status=$(k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name="$service" --no-headers 2>/dev/null | awk '{print $3}' | head -n1)
+        if [[ "$pod_status" == "Running" ]]; then
+            print_success "$service - 运行正常"
         else
-            print_warning "$service - 连接失败"
+            print_warning "$service - 状态: $pod_status"
         fi
     done
 
+    # 等待证书就绪
+    print_info "等待SSL证书就绪..."
+    sleep 30
+
+    # 测试服务连通性
+    print_info "测试服务连通性..."
+    local services=("$WEB_HOST:$HTTPS_PORT" "$AUTH_HOST:$HTTPS_PORT" "$RTC_HOST:$HTTPS_PORT" "$SYNAPSE_HOST:$HTTPS_PORT")
+
+    for service in "${services[@]}"; do
+        local host=$(echo "$service" | cut -d':' -f1)
+        local port=$(echo "$service" | cut -d':' -f2)
+
+        print_info "测试 $service..."
+        if timeout 10 bash -c "echo >/dev/tcp/$host/$port" 2>/dev/null; then
+            print_success "$service - 端口连接正常"
+        else
+            print_warning "$service - 端口连接失败"
+        fi
+
+        # 测试HTTPS连接
+        if curl -s --connect-timeout 10 --max-time 15 -k "https://$service" > /dev/null 2>&1; then
+            print_success "$service - HTTPS连接正常"
+        else
+            print_warning "$service - HTTPS连接失败"
+        fi
+    done
+
+    # 检查well-known配置
+    print_info "检查Matrix well-known配置..."
+    if curl -s --connect-timeout 5 "https://$SERVER_NAME:$HTTPS_PORT/.well-known/matrix/server" | grep -q "$SYNAPSE_HOST"; then
+        print_success "Matrix server well-known配置正常"
+    else
+        print_warning "Matrix server well-known配置可能有问题"
+    fi
+
+    if curl -s --connect-timeout 5 "https://$SERVER_NAME:$HTTPS_PORT/.well-known/matrix/client" | grep -q "$WEB_HOST"; then
+        print_success "Matrix client well-known配置正常"
+    else
+        print_warning "Matrix client well-known配置可能有问题"
+    fi
+
     print_success "部署验证完成"
+
+    # 显示访问信息
+    print_header "访问信息"
+    echo -e "${WHITE}服务访问地址:${NC}"
+    echo -e "  Element Web: https://$WEB_HOST:$HTTPS_PORT"
+    echo -e "  认证服务: https://$AUTH_HOST:$HTTPS_PORT"
+    echo -e "  RTC服务: https://$RTC_HOST:$HTTPS_PORT"
+    echo -e "  Synapse: https://$SYNAPSE_HOST:$HTTPS_PORT"
+    echo -e "  服务器名: $SERVER_NAME"
+    echo
 }
 
 # ==================== 服务管理模块 ====================
@@ -1226,13 +1491,13 @@ verify_deployment() {
 show_service_status() {
     print_header "服务状态"
 
-    local namespace="matrix"
+    local namespace="ess"
 
     echo -e "${WHITE}K3s集群状态:${NC}"
     k3s kubectl get nodes
     echo
 
-    echo -e "${WHITE}Matrix服务状态:${NC}"
+    echo -e "${WHITE}ESS服务状态:${NC}"
     k3s kubectl get pods -n "$namespace" -o wide
     echo
 
@@ -1240,22 +1505,30 @@ show_service_status() {
     k3s kubectl get services -n "$namespace"
     echo
 
+    echo -e "${WHITE}Ingress状态:${NC}"
+    k3s kubectl get ingress -n "$namespace"
+    echo
+
     echo -e "${WHITE}证书状态:${NC}"
     k3s kubectl get certificates -n "$namespace"
+    echo
+
+    echo -e "${WHITE}Helm部署状态:${NC}"
+    helm list -n "$namespace"
     echo
 }
 
 restart_services() {
     print_step "重启服务"
 
-    local namespace="matrix"
+    local namespace="ess"
 
-    if confirm_action "是否重启所有Matrix服务"; then
-        print_info "重启Matrix服务..."
+    if confirm_action "是否重启所有ESS服务"; then
+        print_info "重启ESS服务..."
         k3s kubectl rollout restart deployment -n "$namespace"
 
         print_info "等待服务重启完成..."
-        k3s kubectl rollout status deployment -n "$namespace" --timeout=300s
+        k3s kubectl rollout status deployment -n "$namespace" --timeout=600s
 
         print_success "服务重启完成"
     fi
@@ -1264,7 +1537,7 @@ restart_services() {
 show_logs() {
     print_step "查看日志"
 
-    local namespace="matrix"
+    local namespace="ess"
 
     echo -e "${WHITE}可用的服务:${NC}"
     k3s kubectl get pods -n "$namespace" --no-headers | awk '{print NR") "$1}'
@@ -1276,7 +1549,7 @@ show_logs() {
 
     if [[ -n "$pod_name" ]]; then
         print_info "查看 $pod_name 的日志 (按Ctrl+C退出):"
-        k3s kubectl logs -n "$namespace" "$pod_name" -f
+        k3s kubectl logs -n "$namespace" "$pod_name" -f --tail=100
     else
         print_error "无效的服务编号"
     fi
@@ -1291,13 +1564,22 @@ cleanup_ess() {
         return 0
     fi
 
-    local namespace="matrix"
+    local namespace="ess"
 
     print_info "卸载ESS Helm Chart..."
-    helm uninstall matrix-ess -n "$namespace" || true
+    helm uninstall ess -n "$namespace" || true
 
-    print_info "删除Matrix命名空间..."
-    k3s kubectl delete namespace "$namespace" || true
+    print_info "等待资源清理..."
+    sleep 10
+
+    print_info "删除ESS命名空间..."
+    k3s kubectl delete namespace "$namespace" --timeout=60s || true
+
+    # 强制删除命名空间（如果卡住）
+    if k3s kubectl get namespace "$namespace" &> /dev/null; then
+        print_info "强制删除命名空间..."
+        k3s kubectl patch namespace "$namespace" -p '{"metadata":{"finalizers":[]}}' --type=merge || true
+    fi
 
     print_success "ESS清理完成"
 }
@@ -1499,11 +1781,13 @@ full_deployment() {
 
     # 安装基础组件
     install_k3s
+    configure_traefik
     install_helm
     install_cert_manager
     configure_cert_manager
 
     # 部署ESS
+    check_latest_versions
     verify_ess_chart
     generate_ess_values
     deploy_ess
@@ -1867,7 +2151,8 @@ show_main_menu() {
     echo -e "  ${GREEN}5)${NC} 系统信息"
     echo -e "  ${GREEN}6)${NC} 网络诊断"
     echo -e "  ${GREEN}7)${NC} 备份配置"
-    echo -e "  ${GREEN}8)${NC} 检查更新"
+    echo -e "  ${GREEN}8)${NC} 检查组件版本"
+    echo -e "  ${GREEN}9)${NC} 检查脚本更新"
     echo -e "  ${RED}0)${NC} 退出"
     echo
 }
@@ -1885,7 +2170,7 @@ main() {
     # 主循环
     while true; do
         show_main_menu
-        read -p "请选择操作 (0-8): " choice
+        read -p "请选择操作 (0-9): " choice
 
         case $choice in
             1)
@@ -1925,6 +2210,10 @@ main() {
                 read -p "按回车键继续..."
                 ;;
             8)
+                check_latest_versions
+                read -p "按回车键继续..."
+                ;;
+            9)
                 check_script_update
                 read -p "按回车键继续..."
                 ;;
@@ -1933,7 +2222,7 @@ main() {
                 exit 0
                 ;;
             *)
-                print_error "无效选择，请输入 0-8"
+                print_error "无效选择，请输入 0-9"
                 sleep 2
                 ;;
         esac
