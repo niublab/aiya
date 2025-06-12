@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.5.0"
+readonly SCRIPT_VERSION="2.5.1"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -2021,12 +2021,13 @@ fix_element_web_configuration() {
   }
 }"
 
-    # 使用文件方式更新Element Web ConfigMap
+    # 使用文件方式更新Element Web ConfigMap - 修复JSON格式问题
     local patch_file="/tmp/element-web-patch.json"
+    local config_json_string=$(echo "$element_config" | jq -c . | sed 's/"/\\"/g')
     cat > "$patch_file" << EOF
 {
   "data": {
-    "config.json": $(echo "$element_config" | jq -c .)
+    "config.json": "$config_json_string"
   }
 }
 EOF
