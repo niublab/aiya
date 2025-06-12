@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="1.3.0"
+readonly SCRIPT_VERSION="1.3.1"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1319,7 +1319,7 @@ generate_ess_values() {
     print_info "生成ESS values文件: $values_file"
     print_info "基于官方schema生成最小化配置..."
 
-    # 基于官方quick-setup-hostnames.yaml的配置，添加必要的Ingress配置
+    # 基于官方quick-setup-hostnames.yaml的最简配置
     cat > "$values_file" << EOF
 # Matrix ESS Community 配置文件
 # 生成时间: $(date)
@@ -1330,20 +1330,10 @@ generate_ess_values() {
 # 服务器名称 (必需)
 serverName: "$SERVER_NAME"
 
-# 全局Ingress配置
-ingress:
-  class: traefik
-  tls:
-    enabled: true
-
 # Element Web配置
 elementWeb:
   ingress:
     host: "$WEB_HOST"
-    className: traefik
-    tls:
-      enabled: true
-      secretName: "$WEB_HOST-tls"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
 
@@ -1351,10 +1341,6 @@ elementWeb:
 matrixAuthenticationService:
   ingress:
     host: "$AUTH_HOST"
-    className: traefik
-    tls:
-      enabled: true
-      secretName: "$AUTH_HOST-tls"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
 
@@ -1362,10 +1348,6 @@ matrixAuthenticationService:
 matrixRTC:
   ingress:
     host: "$RTC_HOST"
-    className: traefik
-    tls:
-      enabled: true
-      secretName: "$RTC_HOST-tls"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
 
@@ -1373,10 +1355,6 @@ matrixRTC:
 synapse:
   ingress:
     host: "$SYNAPSE_HOST"
-    className: traefik
-    tls:
-      enabled: true
-      secretName: "$SYNAPSE_HOST-tls"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
 EOF
