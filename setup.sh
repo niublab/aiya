@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="1.4.0"
+readonly SCRIPT_VERSION="2.0.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1021,6 +1021,7 @@ configure_traefik() {
 
         # 配置Traefik使用固定NodePort
         print_info "配置Traefik使用固定NodePort端口..."
+        print_info "HTTP NodePort: $NODEPORT_HTTP, HTTPS NodePort: $NODEPORT_HTTPS"
 
         cat << EOF | k3s kubectl apply -f -
 apiVersion: helm.cattle.io/v1
@@ -1575,6 +1576,249 @@ deploy_ess() {
     print_success "ESS部署完成"
 }
 
+fix_mas_configuration() {
+    print_step "修复MAS配置"
+
+    local namespace="ess"
+
+    # 等待MAS Pod启动
+    print_info "等待MAS Pod启动..."
+    local retry_count=0
+    while ! k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name=matrix-authentication-service --no-headers 2>/dev/null | grep -q "Running"; do
+        if [ $retry_count -ge 30 ]; then
+            print_warning "MAS Pod未在5分钟内启动，跳过MAS配置修复"
+            return 1
+        fi
+        print_info "等待MAS Pod启动... ($((retry_count + 1))/30)"
+        sleep 10
+        ((retry_count++))
+    done
+
+    # 修复MAS配置，添加正确的端口号
+    print_info "修复MAS配置，添加端口号到public_base..."
+
+    # 获取当前MAS配置
+    local current_config=$(k3s kubectl get configmap ess-matrix-authentication-service -n "$namespace" -o jsonpath='{.data.config\.yaml}')
+
+    # 检查是否需要修复
+    if echo "$current_config" | grep -q "public_base.*:$HTTPS_PORT"; then
+        print_success "MAS配置已包含正确端口号"
+        return 0
+    fi
+
+    print_info "更新MAS ConfigMap，添加端口号..."
+
+    # 创建修复后的配置
+    cat << EOF | k3s kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ess-matrix-authentication-service
+  namespace: $namespace
+  labels:
+    app.kubernetes.io/component: matrix-authentication
+    app.kubernetes.io/instance: ess-matrix-authentication-service
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: matrix-authentication-service
+    app.kubernetes.io/part-of: matrix-stack
+    app.kubernetes.io/version: 0.16.0
+    helm.sh/chart: matrix-stack-25.6.1
+data:
+  config.yaml: |
+    http:
+      public_base: "https://$AUTH_HOST:$HTTPS_PORT"
+      listeners:
+      - name: web
+        binds:
+        - host: 0.0.0.0
+          port: 8080
+        resources:
+        - name: human
+        - name: discovery
+        - name: oauth
+        - name: compat
+        - name: assets
+        - name: graphql
+          undocumented_oauth2_access: true
+        - name: adminapi
+      - name: internal
+        binds:
+        - host: 0.0.0.0
+          port: 8081
+        resources:
+        - name: health
+        - name: prometheus
+        - name: connection-info
+
+    database:
+      uri: "postgresql://matrixauthenticationservice_user:\${POSTGRES_PASSWORD}@ess-postgres.ess.svc.cluster.local:5432/matrixauthenticationservice?sslmode=prefer&application_name=matrix-authentication-service"
+
+    telemetry:
+      metrics:
+        exporter: prometheus
+    matrix:
+      homeserver: "$SERVER_NAME"
+      secret: \${SYNAPSE_SHARED_SECRET}
+      endpoint: "http://ess-synapse-main.ess.svc.cluster.local:8008"
+
+    policy:
+      data:
+        admin_clients: []
+        admin_users: []
+        client_registration:
+          allow_host_mismatch: false
+          allow_insecure_uris: false
+    clients:
+    - client_id: "0000000000000000000SYNAPSE"
+      client_auth_method: client_secret_basic
+      client_secret: \${SYNAPSE_OIDC_CLIENT_SECRET}
+
+    secrets:
+      encryption: \${ENCRYPTION_SECRET}
+      keys:
+      - kid: rsa
+        key_file: /secrets/ess-generated/MAS_RSA_PRIVATE_KEY
+      - kid: prime256v1
+        key_file: /secrets/ess-generated/MAS_ECDSA_PRIME256V1_PRIVATE_KEY
+
+    experimental:
+      access_token_ttl: 86400
+EOF
+
+    # 重启MAS Pod以加载新配置
+    print_info "重启MAS Pod以加载新配置..."
+    k3s kubectl rollout restart deployment ess-matrix-authentication-service -n "$namespace"
+
+    # 等待重启完成
+    if k3s kubectl rollout status deployment ess-matrix-authentication-service -n "$namespace" --timeout=300s; then
+            print_success "MAS配置修复完成"
+    else
+        print_warning "MAS重启超时，但配置已更新"
+    fi
+}
+
+create_ssl_certificates() {
+    print_step "创建SSL证书"
+
+    local namespace="ess"
+    local issuer_name="letsencrypt-$CERT_ENVIRONMENT"
+
+    # 检查ClusterIssuer是否存在
+    if ! k3s kubectl get clusterissuer "$issuer_name" &> /dev/null; then
+        print_error "ClusterIssuer $issuer_name 不存在，请先配置cert-manager"
+        return 1
+    fi
+
+    print_info "为所有服务创建SSL证书..."
+
+    # 创建证书资源
+    cat << EOF | k3s kubectl apply -f -
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: app-$(echo "$WEB_HOST" | tr '.' '-')-tls
+  namespace: $namespace
+spec:
+  secretName: app-$(echo "$WEB_HOST" | tr '.' '-')-tls
+  issuerRef:
+    name: $issuer_name
+    kind: ClusterIssuer
+  dnsNames:
+  - $WEB_HOST
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mas-$(echo "$AUTH_HOST" | tr '.' '-')-tls
+  namespace: $namespace
+spec:
+  secretName: mas-$(echo "$AUTH_HOST" | tr '.' '-')-tls
+  issuerRef:
+    name: $issuer_name
+    kind: ClusterIssuer
+  dnsNames:
+  - $AUTH_HOST
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: rtc-$(echo "$RTC_HOST" | tr '.' '-')-tls
+  namespace: $namespace
+spec:
+  secretName: rtc-$(echo "$RTC_HOST" | tr '.' '-')-tls
+  issuerRef:
+    name: $issuer_name
+    kind: ClusterIssuer
+  dnsNames:
+  - $RTC_HOST
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: matrix-$(echo "$SYNAPSE_HOST" | tr '.' '-')-tls
+  namespace: $namespace
+spec:
+  secretName: matrix-$(echo "$SYNAPSE_HOST" | tr '.' '-')-tls
+  issuerRef:
+    name: $issuer_name
+    kind: ClusterIssuer
+  dnsNames:
+  - $SYNAPSE_HOST
+EOF
+
+    # 等待证书申请
+    print_info "等待证书申请完成..."
+    local retry_count=0
+    while true; do
+        local ready_certs=$(k3s kubectl get certificates -n "$namespace" --no-headers 2>/dev/null | grep -c "True" || echo "0")
+        local total_certs=$(k3s kubectl get certificates -n "$namespace" --no-headers 2>/dev/null | wc -l || echo "0")
+
+        if [ "$total_certs" -gt 0 ] && [ "$ready_certs" -eq "$total_certs" ]; then
+            print_success "所有证书申请完成 ($ready_certs/$total_certs)"
+            break
+        fi
+
+        if [ $retry_count -ge 30 ]; then  # 5分钟超时
+            print_warning "证书申请超时，但继续部署"
+            print_info "当前证书状态:"
+            k3s kubectl get certificates -n "$namespace"
+            break
+        fi
+
+        print_info "等待证书申请... ($ready_certs/$total_certs) ($((retry_count + 1))/30)"
+        sleep 10
+        ((retry_count++))
+    done
+
+    # 更新Ingress以使用证书
+    print_info "更新Ingress以使用SSL证书..."
+
+    # 为每个Ingress添加TLS配置
+    local ingresses=("ess-element-web" "ess-matrix-authentication-service" "ess-matrix-rtc" "ess-synapse")
+    local hosts=("$WEB_HOST" "$AUTH_HOST" "$RTC_HOST" "$SYNAPSE_HOST")
+    local secrets=("app-$(echo "$WEB_HOST" | tr '.' '-')-tls" "mas-$(echo "$AUTH_HOST" | tr '.' '-')-tls" "rtc-$(echo "$RTC_HOST" | tr '.' '-')-tls" "matrix-$(echo "$SYNAPSE_HOST" | tr '.' '-')-tls")
+
+    for i in "${!ingresses[@]}"; do
+        local ingress="${ingresses[$i]}"
+        local host="${hosts[$i]}"
+        local secret="${secrets[$i]}"
+
+        print_info "更新 $ingress Ingress..."
+        k3s kubectl patch ingress "$ingress" -n "$namespace" --type='merge' -p="{
+            \"spec\": {
+                \"tls\": [
+                    {
+                        \"hosts\": [\"$host\"],
+                        \"secretName\": \"$secret\"
+                    }
+                ]
+            }
+        }" || print_warning "更新 $ingress Ingress失败"
+    done
+
+    print_success "SSL证书配置完成"
+}
+
 create_admin_user() {
     print_step "创建管理员用户"
 
@@ -2117,6 +2361,16 @@ full_deployment() {
     verify_ess_chart
     generate_ess_values
     deploy_ess
+
+    # 修复MAS配置（添加端口号）
+    if ! fix_mas_configuration; then
+        print_warning "MAS配置修复失败，但继续部署..."
+    fi
+
+    # 创建SSL证书
+    if ! create_ssl_certificates; then
+        print_warning "SSL证书创建失败，但继续部署..."
+    fi
 
     # 创建管理员用户
     if ! create_admin_user; then
