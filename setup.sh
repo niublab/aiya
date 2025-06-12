@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="1.2.2"
+readonly SCRIPT_VERSION="1.2.3"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -729,10 +729,39 @@ install_k3s() {
     export INSTALL_K3S_EXEC="$install_args"
 
     # 下载并执行K3s安装脚本（清理环境变量避免颜色代码污染）
-    env -i PATH="$PATH" \
+    print_info "开始安装K3s..."
+    if ! env -i PATH="$PATH" \
         INSTALL_K3S_VERSION="$INSTALL_K3S_VERSION" \
         INSTALL_K3S_EXEC="$INSTALL_K3S_EXEC" \
-        bash -c 'curl -sfL https://get.k3s.io | sh -'
+        bash -c 'curl -sfL https://get.k3s.io | sh -'; then
+
+        print_error "K3s安装脚本执行失败"
+        print_info "尝试诊断问题..."
+
+        # 检查系统状态
+        print_info "检查系统状态:"
+        echo "内存使用情况:"
+        free -h
+        echo "磁盘使用情况:"
+        df -h /
+
+        # 检查是否有进程占用端口
+        print_info "检查端口占用:"
+        netstat -tuln | grep -E ':(6443|10250)' || echo "K3s端口未被占用"
+
+        # 尝试手动启动服务
+        print_info "尝试手动启动K3s服务..."
+        if systemctl start k3s; then
+            print_info "K3s服务手动启动成功"
+        else
+            print_error "K3s服务启动失败，查看详细日志:"
+            systemctl status k3s.service --no-pager || true
+            journalctl -u k3s.service --no-pager -n 20 || true
+
+            print_warning "K3s安装失败，但继续尝试其他方法..."
+            return 1
+        fi
+    fi
 
     # 等待K3s服务启动
     print_info "等待K3s服务启动..."
@@ -797,6 +826,89 @@ install_k3s() {
     fi
 
     print_success "K3s安装完成"
+}
+
+diagnose_and_fix_k3s() {
+    print_step "诊断和修复K3s问题"
+
+    print_info "开始K3s问题诊断..."
+
+    # 检查系统资源
+    print_info "检查系统资源..."
+    local mem_available=$(free -m | awk 'NR==2{printf "%.0f", $7}')
+    local disk_available=$(df / | awk 'NR==2{print $4}')
+
+    if [ "$mem_available" -lt 512 ]; then
+        print_warning "可用内存不足: ${mem_available}MB (建议至少512MB)"
+    fi
+
+    if [ "$disk_available" -lt 1048576 ]; then  # 1GB in KB
+        print_warning "可用磁盘空间不足: $(($disk_available/1024))MB (建议至少1GB)"
+    fi
+
+    # 检查端口占用
+    print_info "检查端口占用..."
+    if netstat -tuln | grep -q ":6443"; then
+        print_warning "端口6443已被占用"
+        netstat -tuln | grep ":6443"
+    fi
+
+    # 尝试多种安装方法
+    print_info "尝试不同的K3s安装方法..."
+
+    # 方法1: 完全禁用网络组件
+    print_info "方法1: 禁用网络组件安装..."
+    systemctl stop k3s 2>/dev/null || true
+    /usr/local/bin/k3s-uninstall.sh 2>/dev/null || true
+    sleep 3
+
+    if env -i PATH="$PATH" \
+        INSTALL_K3S_VERSION="$K3S_VERSION" \
+        INSTALL_K3S_EXEC="--write-kubeconfig-mode=644 --disable=traefik --disable=servicelb --disable=metrics-server" \
+        bash -c 'curl -sfL https://get.k3s.io | sh -' && \
+        sleep 10 && systemctl is-active --quiet k3s; then
+        print_success "K3s安装成功 (禁用网络组件)"
+        return 0
+    fi
+
+    # 方法2: 使用Docker运行时
+    print_info "方法2: 使用Docker运行时..."
+    systemctl stop k3s 2>/dev/null || true
+    /usr/local/bin/k3s-uninstall.sh 2>/dev/null || true
+    sleep 3
+
+    if command -v docker &> /dev/null; then
+        if env -i PATH="$PATH" \
+            INSTALL_K3S_VERSION="$K3S_VERSION" \
+            INSTALL_K3S_EXEC="--write-kubeconfig-mode=644 --docker" \
+            bash -c 'curl -sfL https://get.k3s.io | sh -' && \
+            sleep 10 && systemctl is-active --quiet k3s; then
+            print_success "K3s安装成功 (使用Docker)"
+            return 0
+        fi
+    fi
+
+    # 方法3: 最小化安装
+    print_info "方法3: 最小化安装..."
+    systemctl stop k3s 2>/dev/null || true
+    /usr/local/bin/k3s-uninstall.sh 2>/dev/null || true
+    sleep 3
+
+    if env -i PATH="$PATH" \
+        INSTALL_K3S_VERSION="$K3S_VERSION" \
+        INSTALL_K3S_EXEC="--write-kubeconfig-mode=644" \
+        bash -c 'curl -sfL https://get.k3s.io | sh -' && \
+        sleep 15 && systemctl is-active --quiet k3s; then
+        print_success "K3s安装成功 (最小化)"
+        return 0
+    fi
+
+    print_error "所有K3s安装方法都失败了"
+    print_info "请检查系统日志获取更多信息:"
+    print_info "  systemctl status k3s.service"
+    print_info "  journalctl -u k3s.service"
+
+    return 1
 }
 
 configure_traefik() {
@@ -1822,7 +1934,18 @@ full_deployment() {
     save_config
 
     # 安装基础组件
-    install_k3s
+    if ! install_k3s; then
+        print_warning "标准K3s安装失败，启动诊断修复..."
+        if ! diagnose_and_fix_k3s; then
+            print_error "K3s安装完全失败，无法继续部署"
+            print_info "建议："
+            print_info "1. 检查系统资源是否充足"
+            print_info "2. 检查网络连接是否正常"
+            print_info "3. 查看系统日志排查问题"
+            return 1
+        fi
+    fi
+
     configure_traefik
     install_helm
     install_cert_manager
