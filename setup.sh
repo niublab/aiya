@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.7.0"
+readonly SCRIPT_VERSION="2.8.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1963,18 +1963,22 @@ fix_element_web_configuration() {
         return 1
     fi
 
-    # 等待Element Web ConfigMap创建
+    # 等待Element Web ConfigMap创建并稳定
     print_info "等待Element Web ConfigMap创建..."
     local retry_count=0
     while ! k3s kubectl get configmap ess-element-web -n "$namespace" &> /dev/null; do
-        if [ $retry_count -ge 12 ]; then
+        if [ $retry_count -ge 18 ]; then
             print_warning "Element Web ConfigMap未找到，跳过配置修复"
             return 1
         fi
-        print_info "等待Element Web ConfigMap创建... ($((retry_count + 1))/12)"
+        print_info "等待Element Web ConfigMap创建... ($((retry_count + 1))/18)"
         sleep 10
         ((retry_count++))
     done
+
+    # 额外等待确保ConfigMap完全稳定
+    print_info "等待ConfigMap稳定..."
+    sleep 15
 
     # 检查当前Element Web配置
     print_info "检查当前Element Web配置..."
@@ -2032,13 +2036,46 @@ fix_element_web_configuration() {
 }
 EOF
 
-    k3s kubectl patch configmap ess-element-web -n "$namespace" --type='merge' --patch-file="$patch_file"
+    # 尝试多次更新ConfigMap，处理可能的竞争条件
+    local update_success=false
+    local update_retry=0
 
-    if [ $? -eq 0 ]; then
-        print_success "Element Web ConfigMap更新成功"
-    else
-        print_error "Element Web ConfigMap更新失败"
-        return 1
+    while [ $update_retry -lt 3 ]; do
+        if k3s kubectl patch configmap ess-element-web -n "$namespace" --type='merge' --patch-file="$patch_file" 2>/dev/null; then
+            print_success "Element Web ConfigMap更新成功"
+            update_success=true
+            break
+        else
+            print_warning "ConfigMap更新失败，重试 ($((update_retry + 1))/3)..."
+            sleep 5
+            ((update_retry++))
+        fi
+    done
+
+    if [ "$update_success" = false ]; then
+        print_error "Element Web ConfigMap更新失败，尝试替代方案..."
+
+        # 替代方案：直接替换整个ConfigMap
+        print_info "尝试直接替换ConfigMap..."
+        local temp_configmap="/tmp/element-web-configmap.yaml"
+
+        cat > "$temp_configmap" << EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ess-element-web
+  namespace: $namespace
+data:
+  config.json: |
+$(echo "$element_config" | sed 's/^/    /')
+EOF
+
+        if k3s kubectl apply -f "$temp_configmap"; then
+            print_success "Element Web ConfigMap替换成功"
+        else
+            print_error "Element Web ConfigMap替换也失败"
+            return 1
+        fi
     fi
 
     # 重启Element Web服务
