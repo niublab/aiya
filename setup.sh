@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.9.0"
+readonly SCRIPT_VERSION="3.0.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -2091,46 +2091,103 @@ EOF
     return 0
 }
 
-verify_network_access() {
-    print_step "验证网络访问配置"
+setup_servicelb_and_network() {
+    print_step "配置ServiceLB和网络访问"
 
-    # 检查NodePort端口状态
-    print_info "检查NodePort端口状态..."
+    # 检查ServiceLB状态
+    print_info "检查K3s ServiceLB状态..."
+    local svclb_pods=$(k3s kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -c "svclb" 2>/dev/null || echo "0")
 
-    local ports_to_check=("$NODEPORT_HTTP" "$NODEPORT_HTTPS" "$NODEPORT_FEDERATION")
-    local port_names=("HTTP" "HTTPS" "Federation")
+    if [ "$svclb_pods" -eq 0 ]; then
+        print_warning "ServiceLB未运行，正在修复..."
+
+        # 检查Traefik服务状态
+        if ! k3s kubectl get svc traefik -n kube-system &>/dev/null; then
+            print_info "重新创建Traefik服务..."
+
+            # 创建正确的Traefik NodePort服务
+            cat << EOF | k3s kubectl apply -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/instance: traefik-kube-system
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: traefik
+spec:
+  type: NodePort
+  ports:
+  - name: web
+    port: 8080
+    targetPort: 8000
+    nodePort: $NODEPORT_HTTP
+    protocol: TCP
+  - name: websecure
+    port: 8443
+    targetPort: 8443
+    nodePort: $NODEPORT_HTTPS
+    protocol: TCP
+  selector:
+    app.kubernetes.io/instance: traefik-kube-system
+    app.kubernetes.io/name: traefik
+EOF
+        fi
+
+        # 等待ServiceLB启动
+        print_info "等待ServiceLB启动..."
+        local retry_count=0
+        while [ $retry_count -lt 12 ]; do
+            svclb_pods=$(k3s kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -c "svclb" 2>/dev/null || echo "0")
+            if [ "$svclb_pods" -gt 0 ]; then
+                print_success "ServiceLB已启动"
+                break
+            fi
+            print_info "等待ServiceLB启动... ($((retry_count + 1))/12)"
+            sleep 10
+            ((retry_count++))
+        done
+
+        if [ "$svclb_pods" -eq 0 ]; then
+            print_warning "ServiceLB启动失败，但NodePort服务已创建"
+        fi
+    else
+        print_success "ServiceLB运行正常"
+    fi
+
+    # 验证NodePort端口状态
+    print_info "验证NodePort端口状态..."
+    local ports_to_check=("$NODEPORT_HTTP" "$NODEPORT_HTTPS")
+    local port_names=("HTTP" "HTTPS")
 
     for i in "${!ports_to_check[@]}"; do
         local port="${ports_to_check[$i]}"
         local name="${port_names[$i]}"
 
-        if netstat -tuln 2>/dev/null | grep -q ":$port "; then
-            print_success "$name NodePort $port 已监听"
-        else
-            print_warning "$name NodePort $port 未监听"
-        fi
+        # 等待端口监听
+        local port_retry=0
+        while [ $port_retry -lt 6 ]; do
+            if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+                print_success "$name NodePort $port 已监听"
+                break
+            fi
+            if [ $port_retry -eq 5 ]; then
+                print_warning "$name NodePort $port 未监听"
+            else
+                print_info "等待$name NodePort $port 监听... ($((port_retry + 1))/6)"
+                sleep 10
+            fi
+            ((port_retry++))
+        done
     done
-
-    # 检查防火墙规则
-    print_info "检查防火墙端口转发规则..."
-
-    if iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "dpt:$HTTPS_PORT.*:$NODEPORT_HTTPS"; then
-        print_success "HTTPS端口转发规则已配置 ($HTTPS_PORT -> $NODEPORT_HTTPS)"
-    else
-        print_warning "HTTPS端口转发规则可能未配置"
-    fi
-
-    if iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "dpt:$HTTP_PORT.*:$NODEPORT_HTTP"; then
-        print_success "HTTP端口转发规则已配置 ($HTTP_PORT -> $NODEPORT_HTTP)"
-    else
-        print_warning "HTTP端口转发规则可能未配置"
-    fi
 
     print_info "网络访问配置："
     echo -e "  HTTP访问: http://$WEB_HOST:$HTTP_PORT"
     echo -e "  HTTPS访问: https://$WEB_HOST:$HTTPS_PORT"
     echo -e "  联邦端口: $FEDERATION_PORT"
     echo -e "  公网IP: $PUBLIC_IP"
+    echo -e "  路由器转发: $HTTP_PORT->$NODEPORT_HTTP, $HTTPS_PORT->$NODEPORT_HTTPS"
 }
 
 
@@ -2687,8 +2744,8 @@ full_deployment() {
         print_warning "SSL证书创建失败，但继续部署..."
     fi
 
-    # 验证网络访问配置
-    verify_network_access
+    # 配置ServiceLB和网络访问
+    setup_servicelb_and_network
 
     # 创建管理员用户
     if ! create_admin_user; then
