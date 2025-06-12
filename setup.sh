@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.0.1"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1819,6 +1819,82 @@ EOF
     print_success "SSL证书配置完成"
 }
 
+setup_port_forwarding() {
+    print_step "配置端口转发服务"
+
+    # 检查ServiceLB是否正常工作
+    print_info "检查K3s ServiceLB状态..."
+    local svclb_pods=$(k3s kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -c "svclb" || echo "0")
+
+    if [ "$svclb_pods" -gt 0 ]; then
+        print_success "检测到ServiceLB Pod，NodePort应该正常工作"
+
+        # 验证端口监听
+        local retry_count=0
+        while [ $retry_count -lt 6 ]; do
+            if netstat -tuln 2>/dev/null | grep -q ":$NODEPORT_HTTPS "; then
+                print_success "NodePort $NODEPORT_HTTPS 已正常监听"
+                return 0
+            fi
+            print_info "等待NodePort端口监听... ($((retry_count + 1))/6)"
+            sleep 10
+            ((retry_count++))
+        done
+
+        print_warning "NodePort端口未监听，创建端口转发服务作为备用"
+    else
+        print_warning "未检测到ServiceLB Pod，创建端口转发服务"
+    fi
+
+    # 创建端口转发systemd服务
+    print_info "创建端口转发systemd服务..."
+
+    cat << 'EOF' > /etc/systemd/system/matrix-port-forward.service
+[Unit]
+Description=Matrix Port Forward Service
+After=k3s.service
+Requires=k3s.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/kubectl port-forward -n kube-system svc/traefik 8443:8443 --address=0.0.0.0
+Restart=always
+RestartSec=5
+Environment=KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # 启用并启动服务
+    systemctl daemon-reload
+    systemctl enable matrix-port-forward.service
+    systemctl start matrix-port-forward.service
+
+    # 等待端口转发生效
+    print_info "等待端口转发服务启动..."
+    sleep 10
+
+    # 验证端口转发
+    if systemctl is-active --quiet matrix-port-forward.service; then
+        if netstat -tuln 2>/dev/null | grep -q ":8443 "; then
+            print_success "端口转发服务启动成功，8443端口已监听"
+        else
+            print_warning "端口转发服务已启动，但端口可能还未就绪"
+        fi
+    else
+        print_error "端口转发服务启动失败"
+        systemctl status matrix-port-forward.service
+        return 1
+    fi
+
+    print_info "端口转发配置："
+    echo -e "  服务状态: $(systemctl is-active matrix-port-forward.service)"
+    echo -e "  转发规则: 0.0.0.0:8443 -> traefik:8443"
+    echo -e "  访问地址: https://$WEB_HOST:8443"
+}
+
 create_admin_user() {
     print_step "创建管理员用户"
 
@@ -2372,6 +2448,12 @@ full_deployment() {
         print_warning "SSL证书创建失败，但继续部署..."
     fi
 
+    # 配置端口转发（如果需要）
+    if ! setup_port_forwarding; then
+        print_warning "端口转发配置失败，但继续部署..."
+        print_info "您可能需要手动配置网络访问"
+    fi
+
     # 创建管理员用户
     if ! create_admin_user; then
         print_warning "管理员用户创建失败，但部署继续..."
@@ -2417,6 +2499,13 @@ show_deployment_summary() {
     echo -e "  RTC服务: https://$RTC_HOST:$HTTPS_PORT"
     echo -e "  Synapse: https://$SYNAPSE_HOST:$HTTPS_PORT"
     echo -e "  服务器名: $SERVER_NAME"
+    echo
+
+    echo -e "${WHITE}网络配置:${NC}"
+    echo -e "  HTTP端口: $HTTP_PORT (NodePort: $NODEPORT_HTTP)"
+    echo -e "  HTTPS端口: $HTTPS_PORT (NodePort: $NODEPORT_HTTPS)"
+    echo -e "  联邦端口: $FEDERATION_PORT (NodePort: $NODEPORT_FEDERATION)"
+    echo -e "  公网IP: $PUBLIC_IP"
     echo
 
     echo -e "${WHITE}管理员账户:${NC}"
