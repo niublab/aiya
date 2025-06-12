@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-06"
 
@@ -34,7 +34,7 @@ readonly NC='\033[0m'
 readonly DEFAULT_HTTP_PORT="8080"
 readonly DEFAULT_HTTPS_PORT="8443"
 readonly DEFAULT_FEDERATION_PORT="8448"
-readonly DEFAULT_UDP_RANGE="30152-30250"
+readonly DEFAULT_UDP_RANGE="30152-30352"
 readonly DEFAULT_INSTALL_DIR="/opt/matrix"
 
 # 全局配置变量
@@ -1004,45 +1004,34 @@ EOF
 
 # ==================== ESS部署模块 ====================
 
-add_ess_helm_repo() {
-    print_step "添加ESS Helm仓库"
+verify_ess_chart() {
+    print_step "验证ESS Chart"
 
     # 设置Kubernetes环境
     if ! setup_k8s_env; then
         return 1
     fi
 
-    print_info "添加Element Server Suite Helm仓库..."
-    if ! helm repo add ess https://element-hq.github.io/ess-helm; then
-        print_error "添加ESS仓库失败"
-        return 1
-    fi
+    print_info "验证ESS OCI Chart可用性..."
 
-    if ! helm repo update; then
-        print_error "更新Helm仓库失败"
-        return 1
-    fi
+    # 使用helm show chart验证OCI chart是否可用
+    local oci_chart="oci://ghcr.io/element-hq/ess-helm/matrix-stack"
 
-    # 验证仓库
-    print_info "验证ESS Chart版本..."
-    local available_version=""
-    if helm search repo ess/element-server-suite --versions &> /dev/null; then
-        available_version=$(helm search repo ess/element-server-suite --versions | grep -v "CHART VERSION" | head -n1 | awk '{print $2}')
-    fi
-
-    if [[ -n "$available_version" ]]; then
-        print_info "可用的ESS Chart版本: $available_version"
-        if [[ "$available_version" != "$ESS_VERSION" ]]; then
-            print_warning "可用版本 ($available_version) 与预期版本 ($ESS_VERSION) 不匹配"
-            if ! confirm_action "是否继续使用可用版本"; then
-                return 1
-            fi
-        fi
+    if helm show chart "$oci_chart" --version "$ESS_VERSION" &> /dev/null; then
+        print_success "ESS Chart版本 $ESS_VERSION 验证成功"
+        return 0
     else
-        print_warning "无法获取ESS Chart版本信息，将使用预期版本 $ESS_VERSION"
-    fi
+        print_warning "无法验证ESS Chart版本 $ESS_VERSION，尝试获取最新版本..."
 
-    print_success "ESS Helm仓库添加完成"
+        # 尝试不指定版本获取最新版本
+        if helm show chart "$oci_chart" &> /dev/null; then
+            print_info "ESS Chart可用，将使用最新版本"
+            return 0
+        else
+            print_error "无法访问ESS Chart，请检查网络连接"
+            return 1
+        fi
+    fi
 }
 
 generate_ess_values() {
@@ -1066,69 +1055,29 @@ serverName: "$SERVER_NAME"
 elementWeb:
   enabled: true
   ingress:
-    enabled: true
-    annotations:
-      cert-manager.io/cluster-issuer: "$issuer_name"
-    hosts:
-      - host: "$WEB_HOST"
-        paths:
-          - path: /
-            pathType: Prefix
-    tls:
-      - secretName: element-web-tls
-        hosts:
-          - "$WEB_HOST"
+    host: "$WEB_HOST"
 
 # Matrix Authentication Service配置
 matrixAuthenticationService:
   enabled: true
   ingress:
-    enabled: true
-    annotations:
-      cert-manager.io/cluster-issuer: "$issuer_name"
-    hosts:
-      - host: "$AUTH_HOST"
-        paths:
-          - path: /
-            pathType: Prefix
-    tls:
-      - secretName: mas-tls
-        hosts:
-          - "$AUTH_HOST"
+    host: "$AUTH_HOST"
 
 # Matrix RTC配置
 matrixRTC:
   enabled: true
   ingress:
-    enabled: true
-    annotations:
-      cert-manager.io/cluster-issuer: "$issuer_name"
-    hosts:
-      - host: "$RTC_HOST"
-        paths:
-          - path: /
-            pathType: Prefix
-    tls:
-      - secretName: matrix-rtc-tls
-        hosts:
-          - "$RTC_HOST"
+    host: "$RTC_HOST"
 
 # Synapse配置
 synapse:
   enabled: true
   ingress:
-    enabled: true
-    annotations:
-      cert-manager.io/cluster-issuer: "$issuer_name"
-    hosts:
-      - host: "$SYNAPSE_HOST"
-        paths:
-          - path: /
-            pathType: Prefix
-    tls:
-      - secretName: synapse-tls
-        hosts:
-          - "$SYNAPSE_HOST"
+    host: "$SYNAPSE_HOST"
+
+# cert-manager配置
+certManager:
+  clusterIssuer: "$issuer_name"
 
 # PostgreSQL配置
 postgresql:
@@ -1136,20 +1085,6 @@ postgresql:
   auth:
     postgresPassword: "$(generate_password)"
     database: "synapse"
-
-# 网络配置
-service:
-  type: NodePort
-  ports:
-    http: $HTTP_PORT
-    https: $HTTPS_PORT
-    federation: $FEDERATION_PORT
-
-# Well-known配置
-wellKnown:
-  enabled: true
-  server: "$SYNAPSE_HOST:$FEDERATION_PORT"
-  client: "https://$WEB_HOST"
 EOF
 
     print_success "ESS配置文件生成完成: $values_file"
@@ -1165,6 +1100,7 @@ deploy_ess() {
 
     local values_file="$INSTALL_DIR/ess-values.yaml"
     local namespace="matrix"
+    local oci_chart="oci://ghcr.io/element-hq/ess-helm/matrix-stack"
 
     # 检查values文件是否存在
     if [[ ! -f "$values_file" ]]; then
@@ -1179,14 +1115,19 @@ deploy_ess() {
         return 1
     fi
 
-    # 部署ESS
-    print_info "部署Element Server Suite..."
-    if ! helm install matrix-ess ess/element-server-suite \
-        --namespace "$namespace" \
-        --values "$values_file" \
-        --version "$ESS_VERSION" \
-        --wait \
-        --timeout=1200s; then
+    # 部署ESS使用OCI registry
+    print_info "部署Element Server Suite (使用OCI registry)..."
+    local helm_cmd="helm install matrix-ess $oci_chart --namespace $namespace --values $values_file --wait --timeout=1200s"
+
+    # 尝试使用指定版本
+    if helm show chart "$oci_chart" --version "$ESS_VERSION" &> /dev/null; then
+        helm_cmd="$helm_cmd --version $ESS_VERSION"
+        print_info "使用指定版本: $ESS_VERSION"
+    else
+        print_warning "指定版本 $ESS_VERSION 不可用，使用最新版本"
+    fi
+
+    if ! eval "$helm_cmd"; then
         print_error "ESS部署失败"
         print_info "查看部署状态:"
         k3s kubectl get pods -n "$namespace" || true
@@ -1382,26 +1323,154 @@ cleanup_applications() {
 cleanup_complete() {
     print_step "完全清理"
 
-    print_warning "此操作将删除所有组件，包括K3s集群"
+    print_warning "此操作将删除所有组件，包括K3s集群和相关文件"
+    print_warning "这将清理以下内容："
+    print_warning "  - K3s集群和所有容器"
+    print_warning "  - Helm和相关配置"
+    print_warning "  - 配置文件和数据目录"
+    print_warning "  - 系统服务和二进制文件"
+    print_warning "  - 网络配置和证书"
+    echo
+
     if ! confirm_action "是否确认完全清理"; then
         return 0
     fi
 
     # 清理应用
+    print_info "清理应用组件..."
     cleanup_applications
+
+    # 停止所有相关服务
+    print_info "停止相关服务..."
+    systemctl stop k3s || true
+    systemctl stop k3s-agent || true
+    systemctl disable k3s || true
+    systemctl disable k3s-agent || true
 
     # 卸载K3s
     print_info "卸载K3s集群..."
-    /usr/local/bin/k3s-uninstall.sh || true
+    if [[ -f /usr/local/bin/k3s-uninstall.sh ]]; then
+        /usr/local/bin/k3s-uninstall.sh || true
+    else
+        print_warning "K3s卸载脚本不存在，执行手动清理..."
+    fi
+
+    # 清理K3s相关文件和目录
+    print_info "清理K3s相关文件..."
+    rm -rf /var/lib/rancher/k3s || true
+    rm -rf /etc/rancher/k3s || true
+    rm -rf /var/lib/kubelet || true
+    rm -rf /var/lib/cni || true
+    rm -rf /etc/cni || true
+    rm -rf /opt/cni || true
+    rm -rf /run/k3s || true
+    rm -rf /run/flannel || true
+
+    # 清理K3s二进制文件
+    print_info "清理K3s二进制文件..."
+    rm -f /usr/local/bin/k3s || true
+    rm -f /usr/local/bin/kubectl || true
+    rm -f /usr/local/bin/crictl || true
+    rm -f /usr/local/bin/ctr || true
+    rm -f /usr/local/bin/k3s-killall.sh || true
+    rm -f /usr/local/bin/k3s-uninstall.sh || true
+    rm -f /usr/local/bin/k3s-agent-uninstall.sh || true
+
+    # 清理systemd服务文件
+    print_info "清理systemd服务文件..."
+    rm -f /etc/systemd/system/k3s.service || true
+    rm -f /etc/systemd/system/k3s.service.env || true
+    rm -f /etc/systemd/system/k3s-agent.service || true
+    rm -f /etc/systemd/system/k3s-agent.service.env || true
+    systemctl daemon-reload || true
+
+    # 清理Helm
+    print_info "清理Helm..."
+    rm -f /usr/local/bin/helm || true
+    rm -rf ~/.cache/helm || true
+    rm -rf ~/.config/helm || true
+    rm -rf ~/.local/share/helm || true
+
+    # 清理kubeconfig文件
+    print_info "清理kubeconfig文件..."
+    rm -f ~/.kube/config || true
+    rm -rf ~/.kube || true
+
+    # 清理bash别名
+    print_info "清理bash别名..."
+    if [[ -f ~/.bashrc ]]; then
+        sed -i '/alias kubectl=/d' ~/.bashrc || true
+        sed -i '/export KUBECONFIG=/d' ~/.bashrc || true
+    fi
 
     # 清理配置文件
     if [[ -n "$INSTALL_DIR" ]] && [[ -d "$INSTALL_DIR" ]]; then
         if confirm_action "是否删除配置目录 $INSTALL_DIR"; then
-            rm -rf "$INSTALL_DIR"
+            print_info "删除配置目录..."
+            rm -rf "$INSTALL_DIR" || true
         fi
     fi
 
+    # 清理默认配置目录（如果存在）
+    if [[ -d "$DEFAULT_INSTALL_DIR" ]] && [[ "$INSTALL_DIR" != "$DEFAULT_INSTALL_DIR" ]]; then
+        if confirm_action "是否删除默认配置目录 $DEFAULT_INSTALL_DIR"; then
+            print_info "删除默认配置目录..."
+            rm -rf "$DEFAULT_INSTALL_DIR" || true
+        fi
+    fi
+
+    # 清理临时文件
+    print_info "清理临时文件..."
+    rm -f /tmp/setup_*.sh || true
+    rm -f /tmp/matrix_backup_*.tar.gz || true
+    rm -rf /tmp/matrix_backup_* || true
+
+    # 清理容器运行时残留
+    print_info "清理容器运行时残留..."
+    if command -v docker &> /dev/null; then
+        docker system prune -af || true
+    fi
+
+    # 清理containerd残留
+    print_info "清理containerd残留..."
+    if command -v ctr &> /dev/null; then
+        ctr -n k8s.io containers rm $(ctr -n k8s.io containers list -q) 2>/dev/null || true
+        ctr -n k8s.io images rm $(ctr -n k8s.io images list -q) 2>/dev/null || true
+    fi
+
+    # 清理网络接口（如果存在）
+    print_info "清理网络接口..."
+    ip link delete flannel.1 2>/dev/null || true
+    ip link delete cni0 2>/dev/null || true
+    ip link delete docker0 2>/dev/null || true
+
+    # 清理iptables规则
+    print_info "清理iptables规则..."
+    iptables -t nat -F || true
+    iptables -t mangle -F || true
+    iptables -F || true
+    iptables -X || true
+
+    # 清理mount点
+    print_info "清理mount点..."
+    umount /var/lib/kubelet/pods/*/volumes/kubernetes.io~secret/* 2>/dev/null || true
+    umount /var/lib/kubelet/pods/*/volumes/kubernetes.io~configmap/* 2>/dev/null || true
+    umount /var/lib/rancher/k3s/agent/containerd/io.containerd.grpc.v1.cri/sandboxes/*/shm 2>/dev/null || true
+
+    # 清理进程
+    print_info "清理相关进程..."
+    pkill -f k3s || true
+    pkill -f containerd || true
+    pkill -f kubelet || true
+
+    # 清理ESS配置文件（如果存在于其他位置）
+    print_info "清理ESS配置文件..."
+    rm -f /opt/matrix/ess-values.yaml || true
+    rm -f /opt/matrix/matrix-config.env || true
+    rmdir /opt/matrix 2>/dev/null || true
+
     print_success "完全清理完成"
+    print_info "建议重启系统以确保所有更改生效"
 }
 
 # ==================== 完整部署流程 ====================
@@ -1435,7 +1504,7 @@ full_deployment() {
     configure_cert_manager
 
     # 部署ESS
-    add_ess_helm_repo
+    verify_ess_chart
     generate_ess_values
     deploy_ess
 
