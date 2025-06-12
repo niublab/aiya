@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.0.1"
+readonly SCRIPT_VERSION="2.0.2"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1021,7 +1021,7 @@ configure_traefik() {
 
         # 配置Traefik使用固定NodePort
         print_info "配置Traefik使用固定NodePort端口..."
-        print_info "HTTP NodePort: $NODEPORT_HTTP, HTTPS NodePort: $NODEPORT_HTTPS"
+        print_info "HTTP NodePort: $NODEPORT_HTTP, HTTPS NodePort: $NODEPORT_HTTPS, 联邦NodePort: $NODEPORT_FEDERATION"
 
         cat << EOF | k3s kubectl apply -f -
 apiVersion: helm.cattle.io/v1
@@ -1040,6 +1040,10 @@ spec:
         port: 8443
         exposedPort: $HTTPS_PORT
         nodePort: $NODEPORT_HTTPS
+      federation:
+        port: 8448
+        exposedPort: $FEDERATION_PORT
+        nodePort: $NODEPORT_FEDERATION
     service:
       type: NodePort
     providers:
@@ -1895,6 +1899,8 @@ EOF
     echo -e "  访问地址: https://$WEB_HOST:8443"
 }
 
+
+
 create_admin_user() {
     print_step "创建管理员用户"
 
@@ -2505,6 +2511,7 @@ show_deployment_summary() {
     echo -e "  HTTP端口: $HTTP_PORT (NodePort: $NODEPORT_HTTP)"
     echo -e "  HTTPS端口: $HTTPS_PORT (NodePort: $NODEPORT_HTTPS)"
     echo -e "  联邦端口: $FEDERATION_PORT (NodePort: $NODEPORT_FEDERATION)"
+    echo -e "  UDP端口范围: $UDP_RANGE"
     echo -e "  公网IP: $PUBLIC_IP"
     echo
 
