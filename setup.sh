@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="1.3.1"
+readonly SCRIPT_VERSION="1.4.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -36,6 +36,11 @@ readonly DEFAULT_HTTPS_PORT="8443"
 readonly DEFAULT_FEDERATION_PORT="8448"
 readonly DEFAULT_UDP_RANGE="30152-30352"
 readonly DEFAULT_INSTALL_DIR="/opt/matrix"
+
+# 默认NodePort端口配置
+readonly DEFAULT_NODEPORT_HTTP="30080"
+readonly DEFAULT_NODEPORT_HTTPS="30443"
+readonly DEFAULT_NODEPORT_FEDERATION="30448"
 
 # 全局配置变量
 INSTALL_DIR=""
@@ -460,6 +465,71 @@ collect_network_config() {
     read -p "UDP端口范围 [默认: $DEFAULT_UDP_RANGE]: " UDP_RANGE
     UDP_RANGE=${UDP_RANGE:-$DEFAULT_UDP_RANGE}
 
+    # NodePort端口配置
+    echo
+    print_info "配置NodePort端口 (Kubernetes对外暴露端口)"
+
+    while true; do
+        read -p "HTTP NodePort端口 [默认: $DEFAULT_NODEPORT_HTTP]: " NODEPORT_HTTP
+        NODEPORT_HTTP=${NODEPORT_HTTP:-$DEFAULT_NODEPORT_HTTP}
+
+        if ! validate_port "$NODEPORT_HTTP"; then
+            print_error "端口格式不正确"
+            continue
+        fi
+
+        if [[ "$NODEPORT_HTTP" -lt 30000 || "$NODEPORT_HTTP" -gt 32767 ]]; then
+            print_error "NodePort端口必须在30000-32767范围内"
+            continue
+        fi
+
+        break
+    done
+
+    while true; do
+        read -p "HTTPS NodePort端口 [默认: $DEFAULT_NODEPORT_HTTPS]: " NODEPORT_HTTPS
+        NODEPORT_HTTPS=${NODEPORT_HTTPS:-$DEFAULT_NODEPORT_HTTPS}
+
+        if ! validate_port "$NODEPORT_HTTPS"; then
+            print_error "端口格式不正确"
+            continue
+        fi
+
+        if [[ "$NODEPORT_HTTPS" -lt 30000 || "$NODEPORT_HTTPS" -gt 32767 ]]; then
+            print_error "NodePort端口必须在30000-32767范围内"
+            continue
+        fi
+
+        if [[ "$NODEPORT_HTTPS" == "$NODEPORT_HTTP" ]]; then
+            print_error "HTTPS NodePort端口不能与HTTP端口相同"
+            continue
+        fi
+
+        break
+    done
+
+    while true; do
+        read -p "联邦NodePort端口 [默认: $DEFAULT_NODEPORT_FEDERATION]: " NODEPORT_FEDERATION
+        NODEPORT_FEDERATION=${NODEPORT_FEDERATION:-$DEFAULT_NODEPORT_FEDERATION}
+
+        if ! validate_port "$NODEPORT_FEDERATION"; then
+            print_error "端口格式不正确"
+            continue
+        fi
+
+        if [[ "$NODEPORT_FEDERATION" -lt 30000 || "$NODEPORT_FEDERATION" -gt 32767 ]]; then
+            print_error "NodePort端口必须在30000-32767范围内"
+            continue
+        fi
+
+        if [[ "$NODEPORT_FEDERATION" == "$NODEPORT_HTTP" || "$NODEPORT_FEDERATION" == "$NODEPORT_HTTPS" ]]; then
+            print_error "联邦NodePort端口不能与其他端口相同"
+            continue
+        fi
+
+        break
+    done
+
     # 获取公网IP
     PUBLIC_IP=$(get_public_ip "$SERVER_NAME")
     print_info "检测到公网IP: $PUBLIC_IP"
@@ -590,6 +660,11 @@ FEDERATION_PORT="$FEDERATION_PORT"
 UDP_RANGE="$UDP_RANGE"
 PUBLIC_IP="$PUBLIC_IP"
 
+# NodePort配置
+NODEPORT_HTTP="$NODEPORT_HTTP"
+NODEPORT_HTTPS="$NODEPORT_HTTPS"
+NODEPORT_FEDERATION="$NODEPORT_FEDERATION"
+
 # 证书配置
 CERT_EMAIL="$CERT_EMAIL"
 ADMIN_EMAIL="$ADMIN_EMAIL"
@@ -644,6 +719,12 @@ show_config_summary() {
     echo -e "  联邦端口: $FEDERATION_PORT"
     echo -e "  UDP范围: $UDP_RANGE"
     echo -e "  公网IP: $PUBLIC_IP"
+    echo
+
+    echo -e "${WHITE}NodePort配置:${NC}"
+    echo -e "  HTTP NodePort: $NODEPORT_HTTP"
+    echo -e "  HTTPS NodePort: $NODEPORT_HTTPS"
+    echo -e "  联邦NodePort: $NODEPORT_FEDERATION"
     echo
 
     echo -e "${WHITE}证书配置:${NC}"
@@ -938,11 +1019,10 @@ configure_traefik() {
     if k3s kubectl get service traefik -n kube-system &> /dev/null; then
         print_success "检测到K3s内置Traefik服务"
 
-        # 如果需要自定义端口，创建HelmChartConfig
-        if [[ "$HTTP_PORT" != "80" || "$HTTPS_PORT" != "443" ]]; then
-            print_info "配置Traefik自定义端口映射..."
+        # 配置Traefik使用固定NodePort
+        print_info "配置Traefik使用固定NodePort端口..."
 
-            cat << EOF | k3s kubectl apply -f -
+        cat << EOF | k3s kubectl apply -f -
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -952,19 +1032,27 @@ spec:
   valuesContent: |-
     ports:
       web:
+        port: 8000
         exposedPort: $HTTP_PORT
+        nodePort: $NODEPORT_HTTP
       websecure:
+        port: 8443
         exposedPort: $HTTPS_PORT
+        nodePort: $NODEPORT_HTTPS
     service:
-      type: LoadBalancer
+      type: NodePort
+    providers:
+      kubernetesIngress:
+        ingressClass: traefik
+      kubernetesCRD:
+        ingressClass: traefik
 EOF
 
-            print_info "等待Traefik重新配置..."
-            sleep 30
+        print_info "等待Traefik重新配置..."
+        sleep 30
 
-            # 检查Traefik是否重新启动
-            k3s kubectl rollout status deployment traefik -n kube-system --timeout=300s || true
-        fi
+        # 检查Traefik是否重新启动
+        k3s kubectl rollout status deployment traefik -n kube-system --timeout=300s || true
 
         print_success "Traefik配置完成"
     else
