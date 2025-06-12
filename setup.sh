@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.1.2"
+readonly SCRIPT_VERSION="2.1.3"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1931,7 +1931,7 @@ setup_port_forwarding() {
     # 创建端口转发systemd服务
     print_info "创建端口转发systemd服务..."
 
-    cat << 'EOF' > /etc/systemd/system/matrix-port-forward.service
+    cat > /etc/systemd/system/matrix-port-forward.service << EOF
 [Unit]
 Description=Matrix Port Forward Service
 After=k3s.service
@@ -1940,7 +1940,7 @@ Requires=k3s.service
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/kubectl port-forward -n kube-system svc/traefik 8443:8443 --address=0.0.0.0
+ExecStart=/usr/local/bin/kubectl port-forward -n kube-system svc/traefik $HTTPS_PORT:$HTTPS_PORT --address=0.0.0.0
 Restart=always
 RestartSec=5
 Environment=KUBECONFIG=/etc/rancher/k3s/k3s.yaml
@@ -1960,8 +1960,8 @@ EOF
 
     # 验证端口转发
     if systemctl is-active --quiet matrix-port-forward.service; then
-        if netstat -tuln 2>/dev/null | grep -q ":8443 "; then
-            print_success "端口转发服务启动成功，8443端口已监听"
+        if netstat -tuln 2>/dev/null | grep -q ":$HTTPS_PORT "; then
+            print_success "端口转发服务启动成功，$HTTPS_PORT端口已监听"
         else
             print_warning "端口转发服务已启动，但端口可能还未就绪"
         fi
@@ -1973,8 +1973,8 @@ EOF
 
     print_info "端口转发配置："
     echo -e "  服务状态: $(systemctl is-active matrix-port-forward.service)"
-    echo -e "  转发规则: 0.0.0.0:8443 -> traefik:8443"
-    echo -e "  访问地址: https://$WEB_HOST:8443"
+    echo -e "  转发规则: 0.0.0.0:$HTTPS_PORT -> traefik:$HTTPS_PORT"
+    echo -e "  访问地址: https://$WEB_HOST:$HTTPS_PORT"
 }
 
 
