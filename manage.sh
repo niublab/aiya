@@ -1,8 +1,9 @@
 #!/bin/bash
 
-# Matrix ESS Community 管理脚本
-# 版本: 1.0.0
+# Matrix ESS Community 管理工具
+# 版本: 1.1.0
 # 用途: 管理已部署的Matrix ESS实例
+# 命令: manage
 
 set -euo pipefail
 
@@ -370,10 +371,11 @@ set_user_password_interactive() {
         return 1
     fi
 
+    # 修正命令格式：set-password 需要用户名作为位置参数
     if k3s kubectl exec -n ess "$mas_pod" -- \
         mas-cli manage set-password \
-        "$username" \
-        --password "$password"; then
+        --password "$password" \
+        "$username"; then
         print_success "用户 $username 密码设置成功"
     else
         print_error "密码设置失败"
@@ -504,12 +506,32 @@ list_users() {
         return 1
     fi
 
-    # 注意：MAS CLI可能没有直接的list-users命令，这里显示提示
-    print_warning "MAS CLI没有直接的用户列表命令"
-    print_info "您可以通过以下方式查看用户："
-    echo "1. 登录Element Web管理界面"
-    echo "2. 查看Synapse管理API"
-    echo "3. 直接查询数据库"
+    # 使用Synapse Admin API获取用户列表（MAS环境下仍然可用）
+    print_info "通过Synapse Admin API获取用户列表..."
+
+    # 尝试获取管理员令牌
+    print_info "生成管理员访问令牌..."
+    local admin_token=$(k3s kubectl exec -n ess "$mas_pod" -- \
+        mas-cli manage issue-compatibility-token \
+        --yes-i-want-to-grant-synapse-admin-privileges \
+        2>/dev/null | grep -o 'syt_[^[:space:]]*' | head -1)
+
+    if [[ -n "$admin_token" ]]; then
+        print_info "获取用户列表..."
+        # 使用Synapse Admin API
+        local synapse_url="http://ess-synapse:8008"
+        k3s kubectl exec -n ess "$mas_pod" -- \
+            curl -s -H "Authorization: Bearer $admin_token" \
+            "$synapse_url/_synapse/admin/v2/users?limit=50" | jq -r '.users[] | "\(.name) - \(.displayname // "无显示名") - 管理员: \(.admin) - 已停用: \(.deactivated)"' 2>/dev/null || {
+            print_warning "无法获取用户列表，请检查Synapse Admin API"
+        }
+    else
+        print_warning "无法生成管理员令牌"
+        print_info "您可以通过以下方式查看用户："
+        echo "1. 登录Element Web管理界面"
+        echo "2. 使用Synapse Admin工具"
+        echo "3. 直接查询数据库"
+    fi
 
     read -p "按回车键继续..."
 }
@@ -518,9 +540,13 @@ list_users() {
 generate_registration_token() {
     print_step "生成注册令牌"
 
-    print_warning "此功能需要Synapse管理API"
-    print_info "请使用Synapse管理界面或API生成注册令牌"
-    print_info "管理界面地址: https://$SYNAPSE_HOST:$HTTPS_PORT/_synapse/admin"
+    print_warning "在MAS环境下，注册令牌功能已被禁用"
+    print_info "请使用以下替代方案："
+    echo "1. 启用Element Web的用户注册功能"
+    echo "2. 管理员手动创建用户账户"
+    echo "3. 配置外部身份提供商(SSO)"
+    echo
+    print_info "要启用用户注册，请选择 '2) 系统配置' -> '1) 启用/禁用用户注册'"
 
     read -p "按回车键继续..."
 }
@@ -944,32 +970,75 @@ show_system_info() {
     read -p "按回车键继续..."
 }
 
-# 占位函数（待实现）
+# 修复Well-known配置
 fix_wellknown_configuration() {
     print_step "修复Well-known配置"
-    print_info "此功能将调用部署脚本的修复功能"
-    print_warning "请运行部署脚本的配置修复选项"
+
+    print_info "检查当前Well-known配置..."
+    if curl -s "http://$SERVER_NAME:$HTTP_PORT/.well-known/matrix/client" | jq . &>/dev/null; then
+        print_success "Well-known配置可访问"
+        curl -s "http://$SERVER_NAME:$HTTP_PORT/.well-known/matrix/client" | jq .
+    else
+        print_error "Well-known配置无法访问"
+    fi
+
+    echo
+    print_info "要修复Well-known配置，请："
+    echo "1. 重新运行部署脚本"
+    echo "2. 选择配置管理选项"
+    echo "3. 或联系系统管理员"
+
     read -p "按回车键继续..."
 }
 
 fix_element_web_configuration() {
     print_step "修复Element Web配置"
-    print_info "此功能将调用部署脚本的修复功能"
-    print_warning "请运行部署脚本的配置修复选项"
+
+    print_info "检查Element Web配置..."
+    local current_config=$(k3s kubectl get configmap ess-element-web -n ess -o jsonpath='{.data.config\.json}' 2>/dev/null)
+
+    if echo "$current_config" | jq . &>/dev/null; then
+        local base_url=$(echo "$current_config" | jq -r '.default_server_config.m.homeserver.base_url')
+        print_info "当前homeserver配置: $base_url"
+
+        if [[ "$base_url" == *":$HTTPS_PORT" ]]; then
+            print_success "Element Web配置包含正确端口号"
+        else
+            print_warning "Element Web配置缺少端口号"
+            print_info "需要手动修复或重新运行部署脚本"
+        fi
+    else
+        print_error "无法读取Element Web配置"
+    fi
+
     read -p "按回车键继续..."
 }
 
 recreate_ssl_certificates() {
-    print_step "重新申请SSL证书"
-    print_info "此功能将调用部署脚本的证书重新申请功能"
-    print_warning "请运行部署脚本的证书管理选项"
+    print_step "SSL证书管理"
+
+    print_info "检查当前证书状态..."
+    k3s kubectl get certificates -n ess
+    echo
+
+    print_info "证书管理操作："
+    echo "1. 查看证书详情: kubectl describe certificates -n ess"
+    echo "2. 删除证书重新申请: kubectl delete certificates <证书名> -n ess"
+    echo "3. 检查证书申请状态: kubectl get certificaterequests -n ess"
+    echo "4. 重新运行部署脚本进行完整证书管理"
+
     read -p "按回车键继续..."
 }
 
 update_system_config() {
-    print_step "更新系统配置"
-    print_info "此功能将调用部署脚本的配置更新功能"
-    print_warning "请运行部署脚本的配置管理选项"
+    print_step "系统配置更新"
+
+    print_info "当前配置文件位置: $CONFIG_FILE"
+    print_info "要更新系统配置，请："
+    echo "1. 编辑配置文件: nano $CONFIG_FILE"
+    echo "2. 重新运行部署脚本应用更改"
+    echo "3. 或使用本管理工具的其他配置选项"
+
     read -p "按回车键继续..."
 }
 

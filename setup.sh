@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="2.5.1"
+readonly SCRIPT_VERSION="2.6.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -3213,14 +3213,14 @@ download_management_script() {
     fi
 
     local script_url="$base_url/manage.sh"
-    local script_path="/usr/local/bin/matrix-manage"
+    local script_path="/usr/local/bin/manage"
 
     print_info "下载管理脚本..."
     if curl -fsSL "$script_url" -o "$script_path"; then
         chmod +x "$script_path"
         print_success "管理脚本下载成功"
         print_info "脚本位置: $script_path"
-        print_info "使用方法: matrix-manage"
+        print_info "使用方法: manage"
         echo
         print_info "管理脚本功能:"
         echo "  - 用户管理 (创建、删除、锁定用户)"
@@ -3228,7 +3228,7 @@ download_management_script() {
         echo "  - 服务管理 (重启服务、查看日志)"
         echo "  - 系统诊断 (健康检查、性能监控)"
         echo
-        print_success "现在可以运行 'matrix-manage' 命令来管理Matrix服务"
+        print_success "现在可以运行 'manage' 命令来管理Matrix服务"
     else
         print_error "管理脚本下载失败"
         print_info "您可以手动下载:"
