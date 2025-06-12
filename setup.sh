@@ -919,9 +919,10 @@ configure_traefik() {
         return 1
     fi
 
-    # 检查Traefik是否已禁用
+    # 检查Traefik deployment是否存在
+    print_info "检查Traefik状态..."
     if k3s kubectl get deployment traefik -n kube-system &> /dev/null; then
-        print_info "检测到Traefik已启用，配置端口映射..."
+        print_info "检测到Traefik deployment已存在，配置端口映射..."
 
         # 创建Traefik配置
         cat << EOF | k3s kubectl apply -f -
@@ -971,7 +972,11 @@ EOF
 
         print_success "Traefik配置完成"
     else
-        print_warning "Traefik已被禁用，手动安装Traefik..."
+        print_warning "Traefik deployment不存在，手动安装Traefik..."
+
+        # 删除可能存在的HelmChartConfig
+        print_info "清理现有配置..."
+        k3s kubectl delete helmchartconfig traefik -n kube-system 2>/dev/null || true
 
         # 手动安装Traefik
         print_info "添加Traefik Helm仓库..."
