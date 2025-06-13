@@ -335,14 +335,14 @@ collect_config() {
     # 端口配置 - 完全动态
     print_info "端口配置:"
 
-    read -p "HTTP端口 [默认: $DEFAULT_HTTP_PORT]: " HTTP_PORT
-    HTTP_PORT=${HTTP_PORT:-$DEFAULT_HTTP_PORT}
+    read -p "HTTP端口 [默认: 8080]: " HTTP_PORT
+    HTTP_PORT=${HTTP_PORT:-8080}
 
-    read -p "HTTPS端口 [默认: $DEFAULT_HTTPS_PORT]: " HTTPS_PORT
-    HTTPS_PORT=${HTTPS_PORT:-$DEFAULT_HTTPS_PORT}
+    read -p "HTTPS端口 [默认: 8443]: " HTTPS_PORT
+    HTTPS_PORT=${HTTPS_PORT:-8443}
 
-    read -p "联邦端口 [默认: $DEFAULT_FEDERATION_PORT]: " FEDERATION_PORT
-    FEDERATION_PORT=${FEDERATION_PORT:-$DEFAULT_FEDERATION_PORT}
+    read -p "联邦端口 [默认: 8448]: " FEDERATION_PORT
+    FEDERATION_PORT=${FEDERATION_PORT:-8448}
 
     # 网络配置
     print_info "网络配置:"
@@ -458,9 +458,9 @@ HTTPS_PORT="$HTTPS_PORT"       # HTTPS访问端口
 FEDERATION_PORT="$FEDERATION_PORT"  # Matrix联邦端口
 
 # NodePort端口配置 (Kubernetes对外暴露)
-NODEPORT_HTTP="$DEFAULT_NODEPORT_HTTP"          # HTTP NodePort
-NODEPORT_HTTPS="$DEFAULT_NODEPORT_HTTPS"         # HTTPS NodePort
-NODEPORT_FEDERATION="$DEFAULT_NODEPORT_FEDERATION"    # 联邦 NodePort
+NODEPORT_HTTP="30080"          # HTTP NodePort
+NODEPORT_HTTPS="30443"         # HTTPS NodePort
+NODEPORT_FEDERATION="30448"    # 联邦 NodePort
 
 # WebRTC端口配置 (标准配置 - 推荐)
 WEBRTC_TCP_PORT="30881"        # WebRTC TCP端口 (ICE/TCP fallback)
