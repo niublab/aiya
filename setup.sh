@@ -561,10 +561,10 @@ collect_cert_config() {
         ADMIN_EMAIL=""
     fi
 
-    # 证书环境
+    # 证书环境 - 默认使用生产环境
     echo
     print_info "选择证书环境:"
-    echo "  1) 生产环境 (Let's Encrypt 正式证书)"
+    echo "  1) 生产环境 (Let's Encrypt 正式证书) [推荐]"
     echo "  2) 测试环境 (Let's Encrypt 测试证书)"
 
     while true; do
@@ -574,11 +574,13 @@ collect_cert_config() {
         case $cert_choice in
             1)
                 CERT_ENVIRONMENT="production"
+                print_success "已选择生产环境证书"
                 break
                 ;;
             2)
                 CERT_ENVIRONMENT="staging"
                 print_warning "测试环境证书不被浏览器信任，仅用于测试"
+                print_warning "生产部署建议使用生产环境证书"
                 break
                 ;;
             *)
@@ -1411,30 +1413,38 @@ generate_ess_values() {
     print_info "生成ESS values文件: $values_file"
     print_info "基于官方schema生成最小化配置..."
 
-    # 基于官方quick-setup-hostnames.yaml的最简配置
+    # 基于官方quick-setup-hostnames.yaml的配置，包含端口号修复
     cat > "$values_file" << EOF
 # Matrix ESS Community 配置文件
 # 生成时间: $(date)
 # 脚本版本: $SCRIPT_VERSION
 # ESS版本: $ESS_VERSION
-# 基于官方 quick-setup-hostnames.yaml 模板
+# 基于官方 quick-setup-hostnames.yaml 模板，包含端口号修复
 
 # 服务器名称 (必需)
 serverName: "$SERVER_NAME"
 
-# Element Web配置
+# Element Web配置 - 修复端口号问题
 elementWeb:
   ingress:
     host: "$WEB_HOST"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
+  config:
+    default_server_config:
+      m.homeserver:
+        base_url: "https://$SYNAPSE_HOST:$HTTPS_PORT"
+        server_name: "$SERVER_NAME"
 
-# Matrix Authentication Service配置
+# Matrix Authentication Service配置 - 修复端口号问题
 matrixAuthenticationService:
   ingress:
     host: "$AUTH_HOST"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
+  config:
+    http:
+      public_base: "https://$AUTH_HOST:$HTTPS_PORT"
 
 # Matrix RTC配置
 matrixRTC:
@@ -1449,6 +1459,20 @@ synapse:
     host: "$SYNAPSE_HOST"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
+
+# Well-known配置 - 修复端口号问题
+wellKnown:
+  client:
+    m.homeserver:
+      base_url: "https://$SYNAPSE_HOST:$HTTPS_PORT"
+    org.matrix.msc2965.authentication:
+      issuer: "https://$AUTH_HOST:$HTTPS_PORT/"
+      account: "https://$AUTH_HOST:$HTTPS_PORT/account"
+    org.matrix.msc4143.rtc_foci:
+      - type: "livekit"
+        livekit_service_url: "https://$RTC_HOST:$HTTPS_PORT"
+  server:
+    m.server: "$SYNAPSE_HOST:$HTTPS_PORT"
 EOF
 
     # 保存管理员密码到单独文件
@@ -1620,6 +1644,202 @@ deploy_ess() {
     done
 
     print_success "ESS部署完成"
+}
+
+fix_haproxy_configuration() {
+    print_step "修复HAProxy配置（添加MAS路由规则）"
+
+    local namespace="ess"
+
+    # 等待HAProxy Pod启动
+    print_info "等待HAProxy Pod启动..."
+    local retry_count=0
+    while ! k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name=haproxy --no-headers 2>/dev/null | grep -q "Running"; do
+        if [ $retry_count -ge 30 ]; then
+            print_warning "HAProxy Pod未在5分钟内启动，跳过HAProxy配置修复"
+            return 1
+        fi
+        print_info "等待HAProxy Pod启动... ($((retry_count + 1))/30)"
+        sleep 10
+        ((retry_count++))
+    done
+
+    print_info "修复HAProxy配置，添加MAS路由规则..."
+
+    # 创建包含MAS路由的HAProxy配置
+    cat << EOF | k3s kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ess-haproxy
+  namespace: ess
+data:
+  429.http: |
+    HTTP/1.0 429 Too Many Requests
+    Cache-Control: no-cache
+    Connection: close
+    Content-Type: application/json
+    access-control-allow-origin: *
+    access-control-allow-methods: GET, POST, PUT, DELETE, OPTIONS
+    access-control-allow-headers: Origin, X-Requested-With, Content-Type, Accept, Authorization
+
+    {"errcode":"M_UNKNOWN","error":"Server is unavailable"}
+  haproxy.cfg: |
+    global
+      maxconn 40000
+      log stdout format raw local0 info
+      tune.maxrewrite 4096
+      stats socket ipv4@127.0.0.1:1999 level admin
+
+    defaults
+      mode http
+      fullconn 20000
+      maxconn 20000
+      log global
+      timeout connect 5s
+      timeout queue 60s
+      timeout client 900s
+      timeout http-keep-alive 900s
+      timeout http-request 10s
+      timeout server 180s
+      http-reuse aggressive
+      default-server maxconn 500
+      option redispatch
+      compression algo gzip
+      compression type text/plain text/html text/xml application/json text/css
+      errorfile 503 /usr/local/etc/haproxy/429.http
+      hash-type consistent sdbm
+
+    resolvers kubedns
+      parse-resolv-conf
+      accepted_payload_size 8192
+      hold timeout 600s
+      hold refused 600s
+
+    frontend prometheus
+      bind *:8405
+      http-request use-service prometheus-exporter if { path /metrics }
+      monitor-uri /haproxy_test
+      no log
+
+    frontend http-blackhole
+      bind *:8009
+      log-format "%ci:%cp [%tr] %ft %b/%s %Th/%TR/%Tw/%Tc/%Tr/%Ta %ST %B %CC %CS %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %hr %hs %{+Q}r"
+      capture request header Host len 32
+      capture request header Referer len 200
+      capture request header User-Agent len 200
+      http-request deny content-type application/json string '{"errcode": "M_FORBIDDEN", "error": "Blocked"}'
+
+    frontend startup
+       bind *:8406
+       acl synapse_dead nbsrv(synapse-main) lt 1
+       monitor-uri   /synapse_ready
+       monitor fail  if synapse_dead
+
+    frontend synapse-http-in
+      bind *:8008
+      log-format "%ci:%cp [%tr] %ft %b/%s %Th/%TR/%Tw/%Tc/%Tr/%Ta %ST %B %CC %CS %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %hr %hs %{+Q}r"
+      capture request header Host len 32
+      capture request header Referer len 200
+      capture request header User-Agent len 200
+
+      http-request set-var(sess.orig_src) src if !{ var(sess.orig_src) -m found }
+      http-request set-src var(sess.orig_src)
+      http-request set-src hdr(x-forwarded-for)
+      http-request set-header X-Forwarded-For %[src]
+      http-request set-header X-Forwarded-Proto https if !{ hdr(X-Forwarded-Proto) -m found }
+      http-request set-var(txn.x_forwarded_proto) hdr(x-forwarded-proto)
+      http-response add-header Strict-Transport-Security max-age=31536000 if { var(txn.x_forwarded_proto) -m str -i "https" }
+
+      http-request set-var(req.access_token) urlp("access_token") if { urlp("access_token") -m found }
+      http-request set-var(req.access_token) req.fhdr(Authorization),word(2," ") if { hdr_beg("Authorization") -i "Bearer " }
+      http-request set-header X-Access-Token %[var(req.access_token)]
+
+      http-response set-header Permissions-Policy "interest-cohort=()"
+
+      # 关键修复：路由登录/登出/刷新API到MAS
+      acl mas_auth path_reg ^/_matrix/client/.*/login
+      acl mas_auth path_reg ^/_matrix/client/.*/logout
+      acl mas_auth path_reg ^/_matrix/client/.*/refresh
+      acl matrix_path path_beg /_matrix
+      acl synapse_path path_beg /_synapse
+
+      acl rendezvous path_beg /_matrix/client/unstable/org.matrix.msc4108/rendezvous
+      acl rendezvous path_beg /_synapse/client/rendezvous
+      use_backend return_204_rendezvous if { method OPTIONS } rendezvous
+      use_backend return_204_synapse if { method OPTIONS }
+
+      # 路由规则：MAS优先，然后是Synapse
+      use_backend mas-backend if mas_auth
+      use_backend synapse-main if matrix_path
+      use_backend synapse-main if synapse_path
+
+      # 根路径返回简单响应
+      http-request return status 200 content-type "application/json" string '{"server":"Matrix Synapse"}' if { path / }
+
+      use_backend synapse-main
+
+    backend synapse-main
+      default-server maxconn 250
+      option httpchk
+      http-check connect port 8080
+      http-check send meth GET uri /health
+      server-template main 1 _synapse-http._tcp.ess-synapse-main.ess.svc.cluster.local resolvers kubedns init-addr none check
+
+    backend mas-backend
+      default-server maxconn 250
+      option httpchk
+      http-check connect port 8081
+      http-check send meth GET uri /health
+      server mas1 ess-matrix-authentication-service.ess.svc.cluster.local:8080 check
+
+    backend return_204_synapse
+      http-request return status 204 hdr "Access-Control-Allow-Origin" "*" hdr "Access-Control-Allow-Methods" "GET, HEAD, POST, PUT, DELETE, OPTIONS" hdr "Access-Control-Allow-Headers" "Origin, X-Requested-With, Content-Type, Accept, Authorization, Date" hdr "Access-Control-Expose-Headers" "Synapse-Trace-Id, Server"
+
+    backend return_204_rendezvous
+      http-request return status 204 hdr "Access-Control-Allow-Origin" "*" hdr "Access-Control-Allow-Methods" "GET, HEAD, POST, PUT, DELETE, OPTIONS" hdr "Access-Control-Allow-Headers" "Origin, Content-Type, Accept, Content-Type, If-Match, If-None-Match" hdr "Access-Control-Expose-Headers" "Synapse-Trace-Id, Server, ETag"
+
+    frontend well-known-in
+      bind *:8010
+      log-format "%ci:%cp [%tr] %ft %b/%s %Th/%TR/%Tw/%Tc/%Tr/%Ta %ST %B %CC %CS %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %hr %hs %{+Q}r"
+      acl is_delete_put_post_method method DELETE POST PUT
+      http-request deny status 405 if is_delete_put_post_method
+      acl well-known path /.well-known/matrix/server
+      acl well-known path /.well-known/matrix/client
+      acl well-known path /.well-known/matrix/support
+      acl well-known path /.well-known/element/element.json
+      http-request redirect code 301 location https://$WEB_HOST:$HTTPS_PORT unless well-known
+      use_backend well-known-static if well-known
+
+    backend well-known-static
+      mode http
+      http-after-response set-header X-Frame-Options SAMEORIGIN
+      http-after-response set-header X-Content-Type-Options nosniff
+      http-after-response set-header X-XSS-Protection "1; mode=block"
+      http-after-response set-header Content-Security-Policy "frame-ancestors 'self'"
+      http-after-response set-header X-Robots-Tag "noindex, nofollow, noarchive, noimageindex"
+      http-after-response set-header Access-Control-Allow-Origin *
+      http-after-response set-header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+      http-after-response set-header Access-Control-Allow-Headers "X-Requested-With, Content-Type, Authorization"
+      http-request return status 200 content-type "application/json" file "/well-known/server" if { path /.well-known/matrix/server }
+      http-request return status 200 content-type "application/json" file "/well-known/client" if { path /.well-known/matrix/client }
+      http-request return status 200 content-type "application/json" file "/well-known/support" if { path /.well-known/matrix/support }
+      http-request return status 200 content-type "application/json" file "/well-known/element.json" if { path /.well-known/element/element.json }
+
+    backend return_500
+      http-request deny deny_status 500
+EOF
+
+    # 重启HAProxy以应用新配置
+    print_info "重启HAProxy以应用新配置..."
+    k3s kubectl rollout restart deployment ess-haproxy -n "$namespace"
+
+    # 等待重启完成
+    if k3s kubectl rollout status deployment ess-haproxy -n "$namespace" --timeout=300s; then
+        print_success "HAProxy配置修复完成"
+    else
+        print_warning "HAProxy重启超时，但配置已更新"
+    fi
 }
 
 fix_mas_configuration() {
@@ -2771,6 +2991,11 @@ full_deployment() {
     # ESS部署完成后，立即修复配置
     print_info "ESS部署完成，开始修复配置..."
 
+    # 修复HAProxy配置（添加MAS路由规则）
+    if ! fix_haproxy_configuration; then
+        print_warning "HAProxy配置修复失败，但继续部署..."
+    fi
+
     # 修复MAS配置（添加端口号）
     if ! fix_mas_configuration; then
         print_warning "MAS配置修复失败，但继续部署..."
@@ -3024,13 +3249,33 @@ cleanup_menu() {
 
 # ==================== 自我更新模块 ====================
 
+# 自动检测脚本源URL
+get_script_source_url() {
+    # 优先使用环境变量设置的URL
+    if [[ -n "${SCRIPT_SOURCE_URL:-}" ]]; then
+        echo "$SCRIPT_SOURCE_URL"
+        return
+    fi
+
+    # 尝试从脚本执行方式检测
+    if [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ "${BASH_SOURCE[0]}" =~ ^https?:// ]]; then
+        echo "${BASH_SOURCE[0]}"
+        return
+    fi
+
+    # 默认使用GitHub仓库（可通过修改此行适配不同仓库）
+    echo "https://raw.githubusercontent.com/niublab/aiya/main/setup.sh"
+}
+
 check_script_update() {
     print_step "检查脚本更新"
 
-    local remote_url="https://raw.githubusercontent.com/niublab/aiya/main/setup.sh"
+    local remote_url
+    remote_url=$(get_script_source_url)
     local temp_file="/tmp/setup_new.sh"
 
     print_info "检查远程版本..."
+    print_info "脚本源: $remote_url"
 
     # 下载远程脚本
     if ! curl -s --connect-timeout 10 "$remote_url" -o "$temp_file"; then
@@ -3305,14 +3550,10 @@ download_management_script() {
 
     # 动态获取当前脚本的下载源
     local base_url
-    if [[ -n "${SCRIPT_SOURCE_URL:-}" ]]; then
-        # 如果有设置脚本源URL，使用相同的源
-        base_url="${SCRIPT_SOURCE_URL%/*}"
-    else
-        # 默认使用GitHub仓库
-        base_url="https://raw.githubusercontent.com/niublab/aiya/main"
-    fi
-
+    # 获取脚本源URL并构建管理脚本URL
+    local source_url
+    source_url=$(get_script_source_url)
+    local base_url="${source_url%/*}"
     local script_url="$base_url/manage.sh"
     local script_path="/usr/local/bin/manage"
 
@@ -3342,6 +3583,6 @@ download_management_script() {
 
 
 # 脚本入口
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
     main "$@"
 fi
