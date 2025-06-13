@@ -109,16 +109,41 @@ deploy_k3s() {
 
 deploy_helm() {
     print_step "安装 Helm"
-    
+
     if command -v helm &> /dev/null; then
         print_success "Helm已安装"
-        return 0
+    else
+        print_info "下载并安装Helm..."
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        print_success "Helm安装完成"
     fi
-    
-    print_info "下载并安装Helm..."
-    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-    
-    print_success "Helm安装完成"
+
+    # 配置Helm使用K3s的kubeconfig
+    print_info "配置Helm连接K3s集群..."
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+    # 验证Helm可以连接到集群
+    print_info "验证Helm集群连接..."
+    local helm_attempts=10
+    local helm_attempt=1
+    while [[ $helm_attempt -le $helm_attempts ]]; do
+        if helm version --short &>/dev/null && helm list &>/dev/null; then
+            print_success "Helm集群连接验证成功"
+            break
+        fi
+        print_info "等待Helm连接集群... ($helm_attempt/$helm_attempts)"
+        sleep 5
+        ((helm_attempt++))
+    done
+
+    if [[ $helm_attempt -gt $helm_attempts ]]; then
+        print_error "Helm无法连接到K3s集群"
+        print_info "调试信息:"
+        print_info "  KUBECONFIG: $KUBECONFIG"
+        print_info "  K3s状态: $(systemctl is-active k3s || echo '未运行')"
+        print_info "  kubeconfig文件: $(ls -la /etc/rancher/k3s/k3s.yaml 2>/dev/null || echo '不存在')"
+        return 1
+    fi
 }
 
 deploy_cert_manager() {
@@ -487,6 +512,9 @@ main() {
 
     # 检查root权限
     check_root
+
+    # 设置K3s kubeconfig环境变量
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
     # 检查配置文件 (与setup.sh路径保持一致)
     if [[ ! -f "$CONFIG_FILE" ]]; then
