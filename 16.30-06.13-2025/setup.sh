@@ -656,49 +656,19 @@ labels:
   version: "$ESS_VERSION"
   managed-by: "matrix-ess-deploy-script"
 
-# ==================== 证书管理器配置 ====================
-EOF
-
-# 根据是否使用外部反向代理决定证书配置
-if [[ "$HTTP_PORT" != "80" ]] || [[ "$HTTPS_PORT" != "443" ]]; then
-    # 外部反向代理模式 - 禁用ESS内部证书管理
-    cat >> "$values_file" << EOF
-# 外部反向代理模式 - 禁用内部证书和TLS
+# ==================== Ingress配置 ====================
+# 基于实际情况：没有标准端口，始终使用外部反向代理模式
+# 参考ESS官方: charts/matrix-stack/ci/fragments/quick-setup-external-cert.yaml
 ingress:
-  # 不使用cert-manager注解，避免重复申请证书
+  # 外部反向代理模式 - 不使用cert-manager注解
   annotations: {}
 
-  # 禁用TLS，由外部Nginx处理
+  # 禁用TLS，由外部Nginx处理SSL终止 (ESS官方推荐)
   tlsEnabled: false
 
   # 服务类型
   service:
     type: ClusterIP
-EOF
-else
-    # 标准模式 - 使用ESS内部证书管理
-    cat >> "$values_file" << EOF
-# 标准模式 - 使用ESS内部证书管理
-certManager:
-  clusterIssuer: "letsencrypt-production"
-
-ingress:
-  # 使用cert-manager自动申请证书
-  annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-production"
-    traefik.ingress.kubernetes.io/router.tls: "true"
-    traefik.ingress.kubernetes.io/router.entrypoints: "websecure"
-
-  # 启用TLS
-  tlsEnabled: true
-
-  # 服务类型
-  service:
-    type: ClusterIP
-EOF
-fi
-
-cat >> "$values_file" << EOF
 
 # ==================== Element Web配置 ====================
 elementWeb:
@@ -763,12 +733,10 @@ wellKnownDelegation:
 EOF
 
     print_success "ESS配置文件已生成: $values_file"
-    print_info "配置基于ESS官方最新规范，包含所有自定义端口和域名"
+    print_info "配置基于ESS官方外部反向代理模式 (tlsEnabled: false)"
 
-    # 如果用户配置了自定义端口，按ESS官方推荐方式配置外部反向代理
-    if [[ "$HTTP_PORT" != "80" ]] || [[ "$HTTPS_PORT" != "443" ]]; then
-        setup_external_reverse_proxy
-    fi
+    # 基于实际情况：没有标准端口，始终配置外部反向代理
+    setup_external_reverse_proxy
 }
 
 # ==================== 主程序 ====================
