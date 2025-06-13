@@ -198,12 +198,25 @@ EOF
     print_info "配置kubectl..."
     mkdir -p ~/.kube
 
-    # 设置KUBECONFIG环境变量
-    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+    # 等待kubeconfig文件生成
+    local config_retry=0
+    while [[ ! -f "/etc/rancher/k3s/k3s.yaml" ]] && [[ $config_retry -lt 20 ]]; do
+        sleep 3
+        ((config_retry++))
+        print_info "等待kubeconfig生成... ($config_retry/20)"
+    done
+
+    if [[ ! -f "/etc/rancher/k3s/k3s.yaml" ]]; then
+        print_error "kubeconfig文件未生成"
+        exit 1
+    fi
 
     # 复制配置到用户目录
     cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
     chmod 600 ~/.kube/config
+
+    # 设置KUBECONFIG环境变量 (优先使用系统配置)
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
     # 验证kubectl连接
     print_info "验证kubectl连接..."
@@ -229,6 +242,37 @@ EOF
 
     print_success "K3s安装完成"
     kubectl get nodes
+}
+
+# 修复K3s连接问题
+fix_k3s_connection() {
+    print_warning "尝试修复K3s连接问题..."
+
+    # 重启K3s服务
+    print_info "重启K3s服务..."
+    systemctl restart k3s
+
+    # 等待服务启动
+    sleep 30
+
+    # 重新设置kubeconfig
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+    # 测试连接
+    local fix_retry=0
+    while ! kubectl get nodes &>/dev/null && [[ $fix_retry -lt 10 ]]; do
+        sleep 5
+        ((fix_retry++))
+        print_info "等待K3s恢复... ($fix_retry/10)"
+    done
+
+    if kubectl get nodes &>/dev/null; then
+        print_success "K3s连接已修复"
+        return 0
+    else
+        print_error "K3s连接修复失败"
+        return 1
+    fi
 }
 
 # 安装Helm
@@ -859,16 +903,44 @@ EOF
 deploy_ess() {
     print_info "部署ESS..."
 
-    # 验证kubectl连接
-    if ! kubectl get nodes &>/dev/null; then
-        print_error "kubectl无法连接到Kubernetes集群"
-        print_info "检查K3s状态:"
+    # 确保使用正确的kubeconfig
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+    # 验证kubeconfig文件存在
+    if [[ ! -f "/etc/rancher/k3s/k3s.yaml" ]]; then
+        print_error "K3s kubeconfig文件不存在: /etc/rancher/k3s/k3s.yaml"
+        print_info "检查K3s安装状态:"
         systemctl status k3s --no-pager
-        print_info "检查kubeconfig:"
-        echo "KUBECONFIG: ${KUBECONFIG:-未设置}"
-        ls -la ~/.kube/config 2>/dev/null || echo "~/.kube/config 不存在"
-        ls -la /etc/rancher/k3s/k3s.yaml 2>/dev/null || echo "/etc/rancher/k3s/k3s.yaml 不存在"
         exit 1
+    fi
+
+    # 验证kubectl连接
+    print_info "验证kubectl连接..."
+    local kubectl_retry=0
+    while ! kubectl get nodes &>/dev/null && [[ $kubectl_retry -lt 10 ]]; do
+        sleep 5
+        ((kubectl_retry++))
+        print_info "等待kubectl连接... ($kubectl_retry/10)"
+        export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+    done
+
+    if ! kubectl get nodes &>/dev/null; then
+        print_warning "kubectl连接失败，尝试修复..."
+
+        if fix_k3s_connection; then
+            print_success "K3s连接已修复，继续部署"
+        else
+            print_error "kubectl无法连接到Kubernetes集群"
+            print_info "诊断信息:"
+            print_info "KUBECONFIG: $KUBECONFIG"
+            print_info "K3s服务状态:"
+            systemctl status k3s --no-pager
+            print_info "K3s进程:"
+            ps aux | grep k3s | grep -v grep || echo "未找到K3s进程"
+            print_info "API服务器端口:"
+            netstat -tlnp | grep :6443 || echo "6443端口未监听"
+            exit 1
+        fi
     fi
 
     # 显示集群信息
