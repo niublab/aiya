@@ -284,9 +284,70 @@ install_helm() {
     print_success "Helm安装完成"
 }
 
+# 检查证书是否存在
+check_existing_certificate() {
+    local domain="$1"
+
+    # 检查证书文件是否存在
+    if [[ -f "/etc/letsencrypt/live/$domain/fullchain.pem" ]]; then
+        print_info "发现现有证书: $domain"
+
+        # 检查证书有效期
+        local expiry_date=$(openssl x509 -in "/etc/letsencrypt/live/$domain/fullchain.pem" -noout -enddate | cut -d= -f2)
+        local expiry_timestamp=$(date -d "$expiry_date" +%s)
+        local current_timestamp=$(date +%s)
+        local days_until_expiry=$(( (expiry_timestamp - current_timestamp) / 86400 ))
+
+        print_info "证书有效期还有 $days_until_expiry 天"
+
+        # 检查证书是否包含所有需要的域名
+        local cert_domains=$(openssl x509 -in "/etc/letsencrypt/live/$domain/fullchain.pem" -noout -text | grep -A1 "Subject Alternative Name" | tail -1 | tr ',' '\n' | grep DNS | cut -d: -f2 | tr -d ' ')
+        local required_domains=("$DOMAIN" "app.$DOMAIN" "mas.$DOMAIN" "rtc.$DOMAIN" "matrix.$DOMAIN")
+        local missing_domains=()
+
+        for req_domain in "${required_domains[@]}"; do
+            if ! echo "$cert_domains" | grep -q "^$req_domain$"; then
+                missing_domains+=("$req_domain")
+            fi
+        done
+
+        if [[ ${#missing_domains[@]} -gt 0 ]]; then
+            print_warning "证书缺少域名: ${missing_domains[*]}"
+            return 1
+        fi
+
+        # 如果证书30天内过期，需要续期
+        if [[ $days_until_expiry -lt 30 ]]; then
+            print_warning "证书将在30天内过期，需要续期"
+            return 1
+        fi
+
+        print_success "现有证书有效，跳过申请"
+        return 0
+    else
+        print_info "未找到现有证书: $domain"
+        return 1
+    fi
+}
+
+# 续期证书
+renew_certificate() {
+    local domain="$1"
+
+    print_info "续期证书: $domain"
+
+    if certbot renew --cert-name "$domain" --force-renewal; then
+        print_success "证书续期成功"
+        return 0
+    else
+        print_error "证书续期失败"
+        return 1
+    fi
+}
+
 # 生成SSL证书
 generate_ssl_certificates() {
-    print_info "生成SSL证书..."
+    print_info "处理SSL证书..."
 
     # 设置默认值
     local cert_type="${CERT_TYPE:-letsencrypt}"
@@ -298,6 +359,16 @@ generate_ssl_certificates() {
         cert_type="letsencrypt-staging"
         print_warning "测试模式已启用，将使用Let's Encrypt Staging证书"
         print_warning "Staging证书不被浏览器信任，仅用于测试目的"
+    fi
+
+    # 检查现有证书
+    if [[ "$cert_type" == "letsencrypt" || "$cert_type" == "letsencrypt-staging" ]]; then
+        if check_existing_certificate "$DOMAIN"; then
+            print_success "使用现有证书，跳过申请"
+            return 0
+        else
+            print_info "需要申请新证书或续期"
+        fi
     fi
 
     case "$cert_type" in

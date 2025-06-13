@@ -27,12 +27,16 @@ echo "3. 清理Nginx配置..."
 rm -f /etc/nginx/sites-enabled/matrix-ess
 systemctl restart nginx 2>/dev/null || true
 
-# 清理证书
-echo "4. 清理证书..."
+# 清理DNS凭据文件 (保留证书)
+echo "4. 清理DNS凭据..."
 rm -f /etc/letsencrypt/cloudflare.ini
+rm -f /etc/letsencrypt/route53.ini
+rm -f /etc/letsencrypt/digitalocean.ini
 
 # 清理安装目录
 echo "5. 清理安装目录..."
 rm -rf /opt/matrix-ess
 
 echo "清理完成！现在可以重新部署。"
+echo "注意: SSL证书已保留，如需删除证书请手动运行:"
+echo "sudo certbot delete --cert-name your-domain.com"
