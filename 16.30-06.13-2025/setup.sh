@@ -33,6 +33,7 @@ readonly NC='\033[0m'
 SCRIPT_DIR=""
 CONFIG_FILE=""
 INSTALL_DIR=""
+MAIN_DOMAIN=""
 SERVER_NAME=""
 WEB_HOST=""
 AUTH_HOST=""
@@ -200,29 +201,33 @@ collect_config() {
         fi
     done
 
-    # 服务器域名
+    # 主域名
     while true; do
-        read -p "Matrix服务器域名 (如: matrix.example.com): " SERVER_NAME
-        if [[ -n "$SERVER_NAME" && "$SERVER_NAME" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        read -p "主域名 (如: example.com): " MAIN_DOMAIN
+        if [[ -n "$MAIN_DOMAIN" && "$MAIN_DOMAIN" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
             break
         fi
         print_error "请输入有效的域名格式"
     done
 
-    # 子域名配置 - 完全动态
-    print_info "子域名配置 (可以输入完整域名或前缀):"
+    # Matrix服务器域名 (通常是matrix.主域名)
+    read -p "Matrix服务器域名 [默认: matrix.$MAIN_DOMAIN]: " SERVER_NAME
+    SERVER_NAME=${SERVER_NAME:-matrix.$MAIN_DOMAIN}
+
+    # 子域名配置 - 基于主域名自动生成
+    print_info "子域名配置 (基于主域名 $MAIN_DOMAIN 自动生成):"
 
     # Element Web域名
-    read -p "Element Web域名 [默认: element.${SERVER_NAME#*.}]: " WEB_HOST
-    WEB_HOST=${WEB_HOST:-element.${SERVER_NAME#*.}}
+    read -p "Element Web域名 [默认: element.$MAIN_DOMAIN]: " WEB_HOST
+    WEB_HOST=${WEB_HOST:-element.$MAIN_DOMAIN}
 
     # 认证服务域名
-    read -p "认证服务域名 [默认: auth.${SERVER_NAME#*.}]: " AUTH_HOST
-    AUTH_HOST=${AUTH_HOST:-auth.${SERVER_NAME#*.}}
+    read -p "认证服务域名 [默认: auth.$MAIN_DOMAIN]: " AUTH_HOST
+    AUTH_HOST=${AUTH_HOST:-auth.$MAIN_DOMAIN}
 
     # RTC服务域名
-    read -p "RTC服务域名 [默认: rtc.${SERVER_NAME#*.}]: " RTC_HOST
-    RTC_HOST=${RTC_HOST:-rtc.${SERVER_NAME#*.}}
+    read -p "RTC服务域名 [默认: rtc.$MAIN_DOMAIN]: " RTC_HOST
+    RTC_HOST=${RTC_HOST:-rtc.$MAIN_DOMAIN}
 
     # Synapse域名
     read -p "Synapse域名 [默认: $SERVER_NAME]: " SYNAPSE_HOST
@@ -240,6 +245,36 @@ collect_config() {
     read -p "联邦端口 [默认: 8448]: " FEDERATION_PORT
     FEDERATION_PORT=${FEDERATION_PORT:-8448}
 
+    # 网络配置
+    print_info "网络配置:"
+
+    # 公网IP获取方式选择
+    echo
+    print_info "公网IP获取方式:"
+    echo "  1) DDNS解析 - dig +short ip.$MAIN_DOMAIN (推荐)"
+    echo "  2) 外部服务 - curl ifconfig.me (备用)"
+
+    while true; do
+        read -p "请选择IP获取方式 [1-2, 默认: 1]: " ip_choice
+        ip_choice=${ip_choice:-1}
+
+        case $ip_choice in
+            1)
+                IP_METHOD="ddns"
+                print_info "已选择DDNS解析方式"
+                break
+                ;;
+            2)
+                IP_METHOD="external"
+                print_info "已选择外部服务方式"
+                break
+                ;;
+            *)
+                print_error "请输入 1 或 2"
+                ;;
+        esac
+    done
+
     # 管理员配置
     read -p "管理员用户名 [默认: admin]: " ADMIN_USERNAME
     ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
@@ -253,6 +288,9 @@ collect_config() {
         print_error "密码至少需要8位字符"
     done
 
+    # 证书配置
+    print_info "证书配置:"
+
     # 证书邮箱
     while true; do
         read -p "Let's Encrypt证书邮箱: " CERT_EMAIL
@@ -260,6 +298,46 @@ collect_config() {
             break
         fi
         print_error "请输入有效的邮箱地址"
+    done
+
+    # 证书环境选择
+    echo
+    print_info "证书环境选择:"
+    echo "  1) 生产模式 - 正式证书 (推荐)"
+    echo "  2) 测试模式 - 测试证书 (用于调试)"
+
+    while true; do
+        read -p "请选择证书环境 [1-2, 默认: 1]: " cert_choice
+        cert_choice=${cert_choice:-1}
+
+        case $cert_choice in
+            1)
+                CERT_ENVIRONMENT="production"
+                print_info "已选择生产模式"
+                break
+                ;;
+            2)
+                CERT_ENVIRONMENT="staging"
+                print_info "已选择测试模式"
+                break
+                ;;
+            *)
+                print_error "请输入 1 或 2"
+                ;;
+        esac
+    done
+
+    # Cloudflare DNS验证配置
+    print_info "Cloudflare DNS验证配置:"
+    print_info "需要Cloudflare API Token用于DNS验证"
+
+    while true; do
+        read -s -p "Cloudflare API Token: " CLOUDFLARE_TOKEN
+        echo
+        if [[ -n "$CLOUDFLARE_TOKEN" ]]; then
+            break
+        fi
+        print_error "Cloudflare API Token不能为空"
     done
 
     # 保存配置
@@ -284,6 +362,9 @@ INSTALL_DIR="$INSTALL_DIR"
 CONFIG_FILE="$CONFIG_FILE"
 
 # ==================== 域名配置 ====================
+# 主域名 (用于IP解析和子域名生成)
+MAIN_DOMAIN="$MAIN_DOMAIN"
+
 # Matrix服务器名称 (用户ID的域名部分)
 SERVER_NAME="$SERVER_NAME"
 
@@ -323,8 +404,24 @@ K3S_VERSION="$K3S_VERSION"
 HELM_VERSION="$HELM_VERSION"
 
 # ==================== 网络配置 ====================
-# 公网IP (自动检测)
-PUBLIC_IP="\$(curl -s ifconfig.me 2>/dev/null || echo 'unknown')"
+# IP获取方式
+IP_METHOD="$IP_METHOD"
+
+# 公网IP (根据选择的方式获取)
+EOF
+
+    # 根据IP获取方式生成不同的命令
+    if [[ "$IP_METHOD" == "ddns" ]]; then
+        cat >> "$CONFIG_FILE" << 'EOF'
+PUBLIC_IP="$(dig +short ip.$MAIN_DOMAIN @8.8.8.8 2>/dev/null || dig +short ip.$MAIN_DOMAIN @1.1.1.1 2>/dev/null || echo 'unknown')"
+EOF
+    else
+        cat >> "$CONFIG_FILE" << 'EOF'
+PUBLIC_IP="$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || echo 'unknown')"
+EOF
+    fi
+
+    cat >> "$CONFIG_FILE" << EOF
 
 # UDP端口范围 (用于WebRTC)
 UDP_RANGE="30152-30352"
@@ -341,6 +438,52 @@ EOF
 
     chmod 600 "$CONFIG_FILE"
     print_info "配置已保存到: $CONFIG_FILE"
+}
+
+# 网络检测函数 - 遵循需求文档要求
+test_network_connectivity() {
+    print_step "网络连通性检测"
+
+    # 检测DNS解析
+    print_info "检测DNS解析..."
+    if dig +short @8.8.8.8 google.com &> /dev/null; then
+        print_success "DNS解析正常 (8.8.8.8)"
+    elif dig +short @1.1.1.1 google.com &> /dev/null; then
+        print_success "DNS解析正常 (1.1.1.1)"
+    else
+        print_warning "DNS解析可能有问题"
+    fi
+
+    # 检测公网IP获取
+    print_info "检测公网IP获取..."
+    if [[ "$IP_METHOD" == "ddns" ]]; then
+        local test_ip=$(dig +short ip.$MAIN_DOMAIN @8.8.8.8 2>/dev/null || dig +short ip.$MAIN_DOMAIN @1.1.1.1 2>/dev/null)
+        if [[ -n "$test_ip" && "$test_ip" != "unknown" ]]; then
+            print_success "DDNS解析成功: $test_ip"
+        else
+            print_warning "DDNS解析失败，可能需要检查域名配置"
+            print_info "请确认 ip.$MAIN_DOMAIN 的A记录已正确配置"
+        fi
+    else
+        local test_ip=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null)
+        if [[ -n "$test_ip" ]]; then
+            print_success "外部IP服务正常: $test_ip"
+        else
+            print_warning "外部IP服务访问失败"
+        fi
+    fi
+
+    # 检测域名解析
+    print_info "检测域名解析..."
+    for domain in "$WEB_HOST" "$AUTH_HOST" "$RTC_HOST" "$SYNAPSE_HOST"; do
+        if dig +short "$domain" @8.8.8.8 &> /dev/null; then
+            print_success "$domain 解析正常"
+        else
+            print_warning "$domain 解析失败，请检查DNS配置"
+        fi
+    done
+
+    print_success "网络检测完成"
 }
 
 # 生成ESS配置文件 - 基于官方最新规范
@@ -564,6 +707,7 @@ main() {
             1)
                 print_step "开始一键部署"
                 collect_config
+                test_network_connectivity
                 generate_ess_values
 
                 print_info "配置摘要:"
