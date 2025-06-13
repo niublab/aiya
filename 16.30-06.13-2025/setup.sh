@@ -230,27 +230,27 @@ collect_config() {
     # 基于主域名自动生成所有子域名
     print_info "基于主域名 $MAIN_DOMAIN 自动生成子域名:"
 
-    # 使用标准子域名前缀自动生成
-    WEB_HOST="app.$MAIN_DOMAIN"           # Element Web客户端
-    AUTH_HOST="mas.$MAIN_DOMAIN"          # Matrix Authentication Service
-    RTC_HOST="rtc.$MAIN_DOMAIN"           # Matrix RTC (视频会议)
-    SERVER_NAME="matrix.$MAIN_DOMAIN"     # Matrix服务器名称
-    SYNAPSE_HOST="matrix.$MAIN_DOMAIN"    # Synapse主服务器
+    # 使用ESS官方标准子域名前缀 (基于官方规范)
+    WEB_HOST="chat.$MAIN_DOMAIN"          # Element Web客户端 (官方: chat)
+    AUTH_HOST="account.$MAIN_DOMAIN"      # Matrix Authentication Service (官方: account)
+    RTC_HOST="mrtc.$MAIN_DOMAIN"          # Matrix RTC (官方: mrtc)
+    SERVER_NAME="$MAIN_DOMAIN"            # Matrix服务器名称 (官方: serverName)
+    SYNAPSE_HOST="matrix.$MAIN_DOMAIN"    # Synapse访问地址 (官方: matrix)
 
     echo "  Element Web: $WEB_HOST"
-    echo "  认证服务 (MAS): $AUTH_HOST"
+    echo "  认证服务: $AUTH_HOST"
     echo "  RTC服务: $RTC_HOST"
-    echo "  Matrix服务器: $SERVER_NAME"
-    echo "  Synapse: $SYNAPSE_HOST"
+    echo "  Matrix服务器: $SERVER_NAME (用户ID: @username:$SERVER_NAME)"
+    echo "  Synapse访问: $SYNAPSE_HOST"
     echo
 
     if ! confirm "是否使用这些自动生成的域名" "y"; then
-        print_info "请手动输入子域名:"
+        print_info "请手动输入域名:"
         read -p "Element Web域名: " WEB_HOST
         read -p "认证服务域名: " AUTH_HOST
         read -p "RTC服务域名: " RTC_HOST
-        read -p "Matrix服务器域名: " SERVER_NAME
-        read -p "Synapse域名: " SYNAPSE_HOST
+        read -p "Matrix服务器名称 (用户ID域名): " SERVER_NAME
+        read -p "Synapse访问域名: " SYNAPSE_HOST
     fi
 
     # 端口配置 - 完全动态
