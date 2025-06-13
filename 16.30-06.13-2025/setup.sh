@@ -721,15 +721,15 @@ synapse:
 wellKnownDelegation:
   enabled: true
 
-  # 主域名重定向到Element Web
+  # 主域名重定向到Element Web (支持自定义端口)
   baseDomainRedirect:
     enabled: true
-    url: "https://$WEB_HOST"
+    url: "https://$WEB_HOST:$HTTPS_PORT"
 
-  # 基于官方规范的配置
+  # 基于官方规范的配置 (支持自定义端口)
   additional:
-    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST/","account":"https://$AUTH_HOST/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST"}]}'
-    server: '{"m.server":"$SYNAPSE_HOST:443"}'
+    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST:$HTTPS_PORT"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST:$HTTPS_PORT/","account":"https://$AUTH_HOST:$HTTPS_PORT/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST:$HTTPS_PORT"}]}'
+    server: '{"m.server":"$SYNAPSE_HOST:$FEDERATION_PORT"}'
 EOF
 
     print_success "ESS配置文件已生成: $values_file"
