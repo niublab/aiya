@@ -643,9 +643,8 @@ generate_ess_values() {
 
     cat > "$values_file" << EOF
 # Matrix ESS Community 配置文件
-# 基于ESS官方最新规范: $ESS_VERSION
+# 严格基于ESS官方schema: $ESS_VERSION
 # 生成时间: $(date)
-# 配置来源: 需求文档 + 官方最新版规范
 
 # ==================== 全局配置 ====================
 # Matrix服务器名称 (必需) - 用户ID的域名部分
@@ -656,6 +655,10 @@ labels:
   deployment: "ess-community"
   version: "$ESS_VERSION"
   managed-by: "matrix-ess-deploy-script"
+
+# ==================== 证书管理器配置 ====================
+certManager:
+  clusterIssuer: "letsencrypt-production"
 
 # ==================== Ingress全局配置 ====================
 ingress:
@@ -668,9 +671,6 @@ ingress:
   # 启用TLS
   tlsEnabled: true
 
-  # 全局TLS密钥名称
-  tlsSecret: "ess-tls-secret"
-
   # 服务类型
   service:
     type: ClusterIP
@@ -680,39 +680,12 @@ elementWeb:
   enabled: true
   ingress:
     host: "$WEB_HOST"
-    # 继承全局TLS配置
-
-  # Element Web特定配置
-  config:
-    default_server_config:
-      "m.homeserver":
-        base_url: "https://$SYNAPSE_HOST:$HTTPS_PORT"
-        server_name: "$SERVER_NAME"
-      "m.identity_server":
-        base_url: "https://vector.im"
-
-    # 集成管理器配置
-    integrations_ui_url: "https://scalar.vector.im/"
-    integrations_rest_url: "https://scalar.vector.im/api"
-
-    # 品牌配置
-    brand: "Matrix ESS Community"
 
 # ==================== Matrix Authentication Service配置 ====================
 matrixAuthenticationService:
   enabled: true
   ingress:
     host: "$AUTH_HOST"
-
-  # MAS配置
-  config:
-    http:
-      public_base: "https://$AUTH_HOST:$HTTPS_PORT/"
-      issuer: "https://$AUTH_HOST:$HTTPS_PORT/"
-
-    # 数据库配置 (使用内置PostgreSQL)
-    database:
-      uri: "postgresql://mas:mas@postgresql:5432/mas"
 
 # ==================== Matrix RTC配置 ====================
 matrixRTC:
@@ -723,37 +696,25 @@ matrixRTC:
   # SFU配置 - 使用LiveKit
   sfu:
     enabled: true
-    type: "livekit"
+    # 主机网络模式用于UDP端口范围
+    hostNetwork: false
 
-    # LiveKit配置 (标准配置 - 推荐)
-    config:
-      # WebRTC配置
-      rtc:
-        # UDP端口范围 (需求文档指定: 30152-30352) - 必需
-        port_range_start: 30152
-        port_range_end: 30352
-
-        # TCP端口 (ICE/TCP fallback) - 推荐，应对严格防火墙
-        tcp_port: $WEBRTC_TCP_PORT
-
-      # API端口配置
-      port: 7880
-
-  # 服务端口配置
-  service:
-    type: NodePort
-    ports:
-      # API/WebSocket端口
-      http:
-        port: 7880
-        nodePort: $WEBRTC_TCP_PORT
-
-      # UDP端口范围需要通过hostNetwork暴露
-      # 这里只配置主要的UDP端口
-      udp:
-        port: 30152
-        nodePort: 30152
-        protocol: UDP
+    # 暴露的服务配置
+    exposedServices:
+      rtcTcp:
+        enabled: true
+        portType: NodePort
+        port: $WEBRTC_TCP_PORT
+      rtcMuxedUdp:
+        enabled: true
+        portType: NodePort
+        port: 30882
+      rtcUdp:
+        enabled: true
+        portType: NodePort
+        portRange:
+          startPort: 30152
+          endPort: 30352
 
 # ==================== Synapse配置 ====================
 synapse:
@@ -761,127 +722,19 @@ synapse:
   ingress:
     host: "$SYNAPSE_HOST"
 
-  # Synapse配置
-  config:
-    server_name: "$SERVER_NAME"
-    public_baseurl: "https://$SYNAPSE_HOST:$HTTPS_PORT/"
-
-    # 联邦配置
-    federation:
-      enabled: true
-      port: $FEDERATION_PORT
-
-    # 数据库配置 (使用内置PostgreSQL)
-    database:
-      name: "psycopg2"
-      args:
-        user: "synapse"
-        password: "synapse"
-        database: "synapse"
-        host: "postgresql"
-        port: 5432
-
-# ==================== PostgreSQL配置 ====================
-postgresql:
-  enabled: true
-  auth:
-    postgresPassword: "postgres"
-    database: "synapse"
-
-  # 持久化存储
-  persistence:
-    enabled: true
-    size: 10Gi
-
-# ==================== HAProxy配置 ====================
-haproxy:
-  enabled: true
-
-  # HAProxy配置 - 负载均衡和路由
-  config:
-    # 使用自定义端口
-    frontend:
-      http_port: $HTTP_PORT
-      https_port: $HTTPS_PORT
-      federation_port: $FEDERATION_PORT
-
 # ==================== Well-known委托配置 ====================
 wellKnownDelegation:
   enabled: true
 
-  # 主域名重定向到Element Web (使用自定义端口)
+  # 主域名重定向到Element Web
   baseDomainRedirect:
     enabled: true
     url: "https://$WEB_HOST:$HTTPS_PORT"
 
   # 基于官方规范的配置，使用自定义端口
   additional:
-    client: |
-      {
-        "m.homeserver": {
-          "base_url": "https://$SYNAPSE_HOST:$HTTPS_PORT"
-        },
-        "org.matrix.msc2965.authentication": {
-          "issuer": "https://$AUTH_HOST:$HTTPS_PORT/",
-          "account": "https://$AUTH_HOST:$HTTPS_PORT/account"
-        },
-        "org.matrix.msc4143.rtc_foci": [
-          {
-            "type": "livekit",
-            "livekit_service_url": "https://$RTC_HOST:$HTTPS_PORT"
-          }
-        ]
-      }
-
-    server: |
-      {
-        "m.server": "$SYNAPSE_HOST:$HTTPS_PORT"
-      }
-
-# ==================== 服务暴露配置 ====================
-# 使用NodePort暴露服务到自定义端口
-service:
-  type: NodePort
-  ports:
-    http:
-      port: 80
-      nodePort: $NODEPORT_HTTP
-    https:
-      port: 443
-      nodePort: $NODEPORT_HTTPS
-    federation:
-      port: 8448
-      nodePort: $NODEPORT_FEDERATION
-
-# ==================== 网络策略配置 ====================
-# UDP端口范围配置 (需求文档: 30152-30352)
-networkPolicy:
-  enabled: true
-
-  # 允许WebRTC端口入站流量 (标准配置)
-  ingress:
-    - from: []
-      ports:
-        # UDP端口范围 (主要WebRTC端口) - 必需
-        - protocol: UDP
-          port: 30152
-          endPort: 30352
-        # TCP端口 (ICE/TCP fallback) - 推荐
-        - protocol: TCP
-          port: $WEBRTC_TCP_PORT
-
-# ==================== 主机网络配置 ====================
-# LiveKit需要主机网络来暴露UDP端口范围 (标准配置)
-hostNetwork:
-  enabled: true
-
-  # UDP端口范围配置 (主要WebRTC端口) - 必需
-  udpPortRange:
-    start: 30152
-    end: 30352
-
-  # TCP端口配置 (ICE/TCP fallback) - 推荐
-  tcpPort: $WEBRTC_TCP_PORT
+    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST:$HTTPS_PORT"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST:$HTTPS_PORT/","account":"https://$AUTH_HOST:$HTTPS_PORT/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST:$HTTPS_PORT"}]}'
+    server: '{"m.server":"$SYNAPSE_HOST:$HTTPS_PORT"}'
 EOF
 
     print_success "ESS配置文件已生成: $values_file"

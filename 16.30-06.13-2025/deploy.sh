@@ -335,12 +335,16 @@ generate_ess_values() {
 
     cat > "$values_file" << EOF
 # Matrix ESS Community 配置文件 (简化版本)
-# 基于ESS官方最新规范 $ESS_VERSION
+# 严格基于ESS官方schema $ESS_VERSION
 # 生成时间: $(date)
 # 警告: 这是简化配置，建议使用setup.sh进行完整部署
 
 # 服务器名称
 serverName: "$SERVER_NAME"
+
+# 证书管理器配置
+certManager:
+  clusterIssuer: "letsencrypt-production"
 
 # 全局Ingress配置
 ingress:
@@ -348,6 +352,8 @@ ingress:
     cert-manager.io/cluster-issuer: "letsencrypt-production"
     traefik.ingress.kubernetes.io/router.tls: "true"
   tlsEnabled: true
+  service:
+    type: ClusterIP
 
 # Element Web配置
 elementWeb:
@@ -366,20 +372,14 @@ matrixRTC:
   enabled: true
   ingress:
     host: "$RTC_HOST"
+  sfu:
+    enabled: true
 
 # Synapse配置
 synapse:
   enabled: true
   ingress:
     host: "$SYNAPSE_HOST"
-
-# PostgreSQL配置
-postgresql:
-  enabled: true
-
-# HAProxy配置
-haproxy:
-  enabled: true
 
 # Well-known委托配置
 wellKnownDelegation:
