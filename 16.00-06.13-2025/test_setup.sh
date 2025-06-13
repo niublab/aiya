@@ -88,14 +88,16 @@ test_function_definitions() {
 # 测试配置变量
 test_config_variables() {
     print_info "测试配置变量..."
-    
+
     local variables=(
         "ESS_CHART_OCI"
         "DEPLOYMENT_PHASE"
         "DEFAULT_WEBRTC_TCP_PORT"
         "DEFAULT_WEBRTC_UDP_PORT"
+        "WEBRTC_TCP_PORT"
+        "WEBRTC_UDP_PORT"
     )
-    
+
     for var in "${variables[@]}"; do
         if grep -q "readonly $var\|$var=" setup.sh; then
             print_success "变量 $var 已定义"
@@ -104,6 +106,55 @@ test_config_variables() {
             return 1
         fi
     done
+}
+
+# 测试WebRTC端口配置
+test_webrtc_config() {
+    print_info "测试WebRTC端口配置..."
+
+    # 检查WebRTC端口收集
+    if grep -q "WebRTC TCP端口" setup.sh; then
+        print_success "WebRTC TCP端口收集已添加"
+    else
+        print_error "WebRTC TCP端口收集未找到"
+        return 1
+    fi
+
+    if grep -q "WebRTC UDP端口" setup.sh; then
+        print_success "WebRTC UDP端口收集已添加"
+    else
+        print_error "WebRTC UDP端口收集未找到"
+        return 1
+    fi
+
+    # 检查配置保存
+    if grep -q "WEBRTC_TCP_PORT=" setup.sh; then
+        print_success "WebRTC端口保存已添加"
+    else
+        print_error "WebRTC端口保存未找到"
+        return 1
+    fi
+}
+
+# 测试端口硬编码修复
+test_port_hardcode_fix() {
+    print_info "测试端口硬编码修复..."
+
+    # 检查Well-known配置中是否还有硬编码的443
+    if grep -q '"m.server":".*:443"' setup.sh; then
+        print_error "仍存在硬编码的443端口"
+        return 1
+    else
+        print_success "硬编码端口已修复"
+    fi
+
+    # 检查是否使用了HTTPS_PORT变量
+    if grep -q '"m.server":".*:$HTTPS_PORT"' setup.sh; then
+        print_success "Well-known配置使用HTTPS_PORT变量"
+    else
+        print_error "Well-known配置未使用HTTPS_PORT变量"
+        return 1
+    fi
 }
 
 # 测试菜单结构
@@ -146,6 +197,8 @@ main() {
         "test_version_info"
         "test_function_definitions"
         "test_config_variables"
+        "test_webrtc_config"
+        "test_port_hardcode_fix"
         "test_menu_structure"
     )
     

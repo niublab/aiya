@@ -534,6 +534,74 @@ collect_network_config() {
         break
     done
 
+    # WebRTC端口配置
+    echo
+    print_info "配置WebRTC端口 (视频会议服务端口)"
+
+    while true; do
+        read -p "WebRTC TCP端口 [默认: $DEFAULT_WEBRTC_TCP_PORT]: " WEBRTC_TCP_PORT
+        WEBRTC_TCP_PORT=${WEBRTC_TCP_PORT:-$DEFAULT_WEBRTC_TCP_PORT}
+
+        if ! validate_port "$WEBRTC_TCP_PORT"; then
+            print_error "端口格式不正确"
+            continue
+        fi
+
+        if [[ "$WEBRTC_TCP_PORT" -lt 30000 || "$WEBRTC_TCP_PORT" -gt 32767 ]]; then
+            print_error "WebRTC端口必须在30000-32767范围内"
+            continue
+        fi
+
+        # 检查与其他端口冲突
+        local used_ports=("$NODEPORT_HTTP" "$NODEPORT_HTTPS" "$NODEPORT_FEDERATION")
+        local conflict=false
+        for port in "${used_ports[@]}"; do
+            if [[ "$WEBRTC_TCP_PORT" == "$port" ]]; then
+                print_error "WebRTC TCP端口不能与其他端口相同"
+                conflict=true
+                break
+            fi
+        done
+
+        if [[ "$conflict" == "true" ]]; then
+            continue
+        fi
+
+        break
+    done
+
+    while true; do
+        read -p "WebRTC UDP端口 [默认: $DEFAULT_WEBRTC_UDP_PORT]: " WEBRTC_UDP_PORT
+        WEBRTC_UDP_PORT=${WEBRTC_UDP_PORT:-$DEFAULT_WEBRTC_UDP_PORT}
+
+        if ! validate_port "$WEBRTC_UDP_PORT"; then
+            print_error "端口格式不正确"
+            continue
+        fi
+
+        if [[ "$WEBRTC_UDP_PORT" -lt 30000 || "$WEBRTC_UDP_PORT" -gt 32767 ]]; then
+            print_error "WebRTC端口必须在30000-32767范围内"
+            continue
+        fi
+
+        # 检查与其他端口冲突
+        local used_ports=("$NODEPORT_HTTP" "$NODEPORT_HTTPS" "$NODEPORT_FEDERATION" "$WEBRTC_TCP_PORT")
+        local conflict=false
+        for port in "${used_ports[@]}"; do
+            if [[ "$WEBRTC_UDP_PORT" == "$port" ]]; then
+                print_error "WebRTC UDP端口不能与其他端口相同"
+                conflict=true
+                break
+            fi
+        done
+
+        if [[ "$conflict" == "true" ]]; then
+            continue
+        fi
+
+        break
+    done
+
     # 获取公网IP
     print_info "获取公网IP地址..."
     PUBLIC_IP=$(get_public_ip "$SERVER_NAME")
@@ -672,6 +740,10 @@ NODEPORT_HTTP="$NODEPORT_HTTP"
 NODEPORT_HTTPS="$NODEPORT_HTTPS"
 NODEPORT_FEDERATION="$NODEPORT_FEDERATION"
 
+# WebRTC配置
+WEBRTC_TCP_PORT="$WEBRTC_TCP_PORT"
+WEBRTC_UDP_PORT="$WEBRTC_UDP_PORT"
+
 # 证书配置
 CERT_EMAIL="$CERT_EMAIL"
 ADMIN_EMAIL="$ADMIN_EMAIL"
@@ -732,6 +804,11 @@ show_config_summary() {
     echo -e "  HTTP NodePort: $NODEPORT_HTTP"
     echo -e "  HTTPS NodePort: $NODEPORT_HTTPS"
     echo -e "  联邦NodePort: $NODEPORT_FEDERATION"
+    echo
+
+    echo -e "${WHITE}WebRTC配置:${NC}"
+    echo -e "  WebRTC TCP端口: $WEBRTC_TCP_PORT"
+    echo -e "  WebRTC UDP端口: $WEBRTC_UDP_PORT"
     echo
 
     echo -e "${WHITE}证书配置:${NC}"
@@ -1473,9 +1550,13 @@ matrixRTC:
   enabled: true
   ingress:
     host: "$RTC_HOST"
-  # SFU配置 - 使用默认LiveKit设置
+  # SFU配置 - 使用自定义端口
   sfu:
     enabled: true
+    # WebRTC端口配置
+    ports:
+      tcp: $WEBRTC_TCP_PORT
+      udp: $WEBRTC_UDP_PORT
 
 # Synapse配置
 synapse:
@@ -1497,10 +1578,10 @@ haproxy:
 # Well-known委托配置 - 联邦和客户端发现
 wellKnownDelegation:
   enabled: true
-  # 基于官方规范的配置
+  # 基于官方规范的配置，使用自定义端口
   additional:
-    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST/","account":"https://$AUTH_HOST/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST"}]}'
-    server: '{"m.server":"$SYNAPSE_HOST:443"}'
+    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST:$HTTPS_PORT"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST:$HTTPS_PORT/","account":"https://$AUTH_HOST:$HTTPS_PORT/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST:$HTTPS_PORT"}]}'
+    server: '{"m.server":"$SYNAPSE_HOST:$HTTPS_PORT"}'
 EOF
 
     # 保存管理员密码到单独文件
@@ -1518,6 +1599,13 @@ Element Web: https://$WEB_HOST:$HTTPS_PORT
 认证服务: https://$AUTH_HOST:$HTTPS_PORT
 RTC服务: https://$RTC_HOST:$HTTPS_PORT
 Synapse: https://$SYNAPSE_HOST:$HTTPS_PORT
+
+# 端口配置
+HTTP端口: $HTTP_PORT
+HTTPS端口: $HTTPS_PORT
+联邦端口: $FEDERATION_PORT
+WebRTC TCP端口: $WEBRTC_TCP_PORT
+WebRTC UDP端口: $WEBRTC_UDP_PORT
 EOF
 
     chmod 600 "$INSTALL_DIR/passwords.txt"
@@ -2510,6 +2598,8 @@ EOF
     echo -e "  HTTP访问: http://$WEB_HOST:$HTTP_PORT"
     echo -e "  HTTPS访问: https://$WEB_HOST:$HTTPS_PORT"
     echo -e "  联邦端口: $FEDERATION_PORT"
+    echo -e "  WebRTC TCP端口: $WEBRTC_TCP_PORT"
+    echo -e "  WebRTC UDP端口: $WEBRTC_UDP_PORT"
     echo -e "  公网IP: $PUBLIC_IP"
     echo -e "  路由器转发: $HTTP_PORT->$NODEPORT_HTTP, $HTTPS_PORT->$NODEPORT_HTTPS"
 }
