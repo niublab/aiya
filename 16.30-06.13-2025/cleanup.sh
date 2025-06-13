@@ -40,8 +40,14 @@ print_error() {
 
 # 加载配置 (如果存在)
 if [[ -f "$CONFIG_FILE" ]]; then
-    source "$CONFIG_FILE"
-    print_info "已加载配置文件: $CONFIG_FILE"
+    # 安全加载配置文件，忽略readonly变量错误
+    if source "$CONFIG_FILE" 2>/dev/null; then
+        print_info "已加载配置文件: $CONFIG_FILE"
+    else
+        print_warning "配置文件加载有警告，但继续执行清理"
+        # 手动提取关键配置
+        INSTALL_DIR=$(grep "^INSTALL_DIR=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "/opt/matrix")
+    fi
 else
     print_warning "未找到配置文件，执行基本清理"
     INSTALL_DIR="/opt/matrix"

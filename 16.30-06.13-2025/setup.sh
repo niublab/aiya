@@ -395,10 +395,11 @@ CERT_EMAIL="$CERT_EMAIL"
 CERT_ENVIRONMENT="production"   # Let's Encrypt环境
 
 # ==================== ESS版本信息 ====================
-ESS_VERSION="$ESS_VERSION"
-ESS_CHART_OCI="$ESS_CHART_OCI"
-K3S_VERSION="$K3S_VERSION"
-HELM_VERSION="$HELM_VERSION"
+# 版本信息由脚本控制，不在配置文件中保存
+# ESS_VERSION="25.6.1"
+# ESS_CHART_OCI="oci://ghcr.io/element-hq/ess-helm/matrix-stack"
+# K3S_VERSION="v1.32.5+k3s1"
+# HELM_VERSION="v3.18.2"
 
 # ==================== 网络配置 ====================
 # IP获取方式 (固定使用需求文档方法)
@@ -431,7 +432,8 @@ show_config_details() {
         return 1
     fi
 
-    source "$CONFIG_FILE"
+    # 安全加载配置文件，忽略readonly变量错误
+    source "$CONFIG_FILE" 2>/dev/null || true
 
     print_step "当前配置详情"
 
@@ -791,7 +793,7 @@ main() {
 
                 # 确保配置已加载
                 if [[ -f "$CONFIG_FILE" ]]; then
-                    source "$CONFIG_FILE"
+                    source "$CONFIG_FILE" 2>/dev/null || true
                 else
                     print_error "配置文件不存在，无法继续部署"
                     read -p "按回车键继续..."
@@ -888,7 +890,7 @@ main() {
                 ;;
             3)
                 if [[ -f "$CONFIG_FILE" ]]; then
-                    source "$CONFIG_FILE"
+                    source "$CONFIG_FILE" 2>/dev/null || true
                     print_warning "将清理以下内容:"
                     echo "  - 安装目录: $INSTALL_DIR"
                     echo "  - 配置文件: $CONFIG_FILE"
@@ -934,7 +936,7 @@ main() {
                 if [[ -f "$CONFIG_FILE" ]]; then
                     echo
                     echo "当前配置:"
-                    source "$CONFIG_FILE"
+                    source "$CONFIG_FILE" 2>/dev/null || true
                     echo "  服务器域名: $SERVER_NAME"
                     echo "  安装目录: $INSTALL_DIR"
                     echo "  配置文件: $CONFIG_FILE"
