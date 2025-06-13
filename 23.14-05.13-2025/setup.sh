@@ -152,6 +152,7 @@ download_all_files() {
         "nginx.conf.template"
         "ess-values.template"
         "ip-updater-usage-examples.md"
+        "check-config.sh"
     )
     
     # 下载所有文件
@@ -182,8 +183,9 @@ show_menu() {
     echo -e "${CYAN}1)${NC} ESS-Helm外部Nginx反代方案"
     echo -e "${CYAN}2)${NC} IP自动更新系统"
     echo -e "${CYAN}3)${NC} 完整部署 (ESS + IP更新系统)"
-    echo -e "${CYAN}4)${NC} 仅下载文件到本地"
-    echo -e "${CYAN}5)${NC} 显示帮助信息"
+    echo -e "${CYAN}4)${NC} 检查配置"
+    echo -e "${CYAN}5)${NC} 仅下载文件到本地"
+    echo -e "${CYAN}6)${NC} 显示帮助信息"
     echo -e "${CYAN}0)${NC} 退出"
     echo
 }
@@ -270,15 +272,46 @@ deploy_ess() {
     export HTTPS_PORT="${HTTPS_PORT:-8443}"
     export FEDERATION_PORT="${FEDERATION_PORT:-8448}"
 
+    # 从ess-config-template.env读取更多配置
+    if [[ -f "ess-config-template.env" ]]; then
+        log "DEBUG" "从配置模板读取额外配置..."
+        # 读取配置但不覆盖已设置的环境变量
+        while IFS='=' read -r key value; do
+            # 跳过注释和空行
+            [[ $key =~ ^[[:space:]]*# ]] && continue
+            [[ -z $key ]] && continue
+
+            # 移除引号
+            value=$(echo "$value" | sed 's/^"//;s/"$//')
+
+            # 只设置未定义的变量
+            if [[ -z "${!key:-}" ]]; then
+                export "$key"="$value"
+                log "DEBUG" "设置配置: $key=$value"
+            fi
+        done < <(grep -E '^[A-Z_]+=.*' ess-config-template.env || true)
+    fi
+
     log "INFO" "使用配置:"
     log "INFO" "  域名: $DOMAIN"
     log "INFO" "  HTTP端口: $HTTP_PORT"
     log "INFO" "  HTTPS端口: $HTTPS_PORT"
     log "INFO" "  联邦端口: $FEDERATION_PORT"
 
-    # 运行部署脚本
+    # 最后验证关键配置
+    if [[ "$DOMAIN" == "your-domain.com" ]]; then
+        log "ERROR" "域名仍为默认值，请设置正确的域名"
+        log "INFO" "使用方法: DOMAIN=your-actual-domain.com AUTO_DEPLOY=3 bash <(curl ...)"
+        return 1
+    fi
+
+    # 运行部署脚本，显式传递环境变量
     log "INFO" "开始部署ESS-Helm..."
-    if ./deploy-ess-nginx-proxy.sh; then
+    if env DOMAIN="$DOMAIN" \
+           HTTP_PORT="$HTTP_PORT" \
+           HTTPS_PORT="$HTTPS_PORT" \
+           FEDERATION_PORT="$FEDERATION_PORT" \
+           ./deploy-ess-nginx-proxy.sh; then
         log "SUCCESS" "ESS-Helm部署完成!"
     else
         log "ERROR" "ESS-Helm部署失败"
@@ -334,22 +367,38 @@ deploy_full() {
     fi
 }
 
+# 检查配置
+check_config() {
+    log "STEP" "检查配置..."
+
+    # 设置执行权限
+    chmod +x check-config.sh
+
+    # 运行配置检查
+    if ./check-config.sh; then
+        log "SUCCESS" "配置检查完成"
+    else
+        log "WARNING" "配置检查发现问题，请根据建议修复"
+    fi
+}
+
 # 下载文件到本地
 download_to_local() {
     log "STEP" "下载文件到本地..."
-    
+
     local local_dir="${HOME}/ess-installer-$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$local_dir"
-    
+
     # 复制所有文件
     cp -r "$TEMP_DIR"/* "$local_dir/"
-    
+
     # 设置权限
     chmod +x "$local_dir"/*.sh
-    
+
     log "SUCCESS" "文件已下载到: $local_dir"
     log "INFO" "您可以进入目录手动运行部署脚本:"
     log "INFO" "  cd $local_dir"
+    log "INFO" "  ./check-config.sh  # 检查配置"
     log "INFO" "  sudo ./deploy-ess-nginx-proxy.sh"
     log "INFO" "  sudo ./install-ip-updater.sh"
 }
@@ -471,10 +520,13 @@ main() {
                 break
                 ;;
             "4")
+                check_config
+                ;;
+            "5")
                 download_to_local
                 break
                 ;;
-            "5")
+            "6")
                 show_help
                 ;;
             "0")
@@ -482,7 +534,7 @@ main() {
                 exit 0
                 ;;
             *)
-                log "ERROR" "无效选择，请输入 1-5 或 0"
+                log "ERROR" "无效选择，请输入 1-6 或 0"
                 ;;
         esac
     done

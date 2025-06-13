@@ -5,13 +5,60 @@
 
 set -euo pipefail
 
-# 配置变量
+# 加载配置文件 (如果存在)
+if [[ -f "ess-config-template.env" ]]; then
+    echo "[INFO] 发现配置文件，加载配置..."
+    # 只加载未设置的环境变量
+    while IFS='=' read -r key value; do
+        # 跳过注释和空行
+        [[ $key =~ ^[[:space:]]*# ]] && continue
+        [[ -z $key ]] && continue
+
+        # 移除引号
+        value=$(echo "$value" | sed 's/^"//;s/"$//')
+
+        # 只设置未定义的变量
+        if [[ -z "${!key:-}" ]]; then
+            export "$key"="$value"
+        fi
+    done < <(grep -E '^[A-Z_]+=.*' ess-config-template.env || true)
+fi
+
+# 配置变量 (优先使用环境变量)
 DOMAIN="${DOMAIN:-your-domain.com}"
 HTTP_PORT="${HTTP_PORT:-8080}"
 HTTPS_PORT="${HTTPS_PORT:-8443}"
 FEDERATION_PORT="${FEDERATION_PORT:-8448}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/matrix-ess}"
 NAMESPACE="${NAMESPACE:-ess}"
+
+# 验证关键配置
+validate_config() {
+    echo "[INFO] 验证配置参数..."
+
+    if [[ "$DOMAIN" == "your-domain.com" ]]; then
+        echo "[ERROR] 域名配置无效: $DOMAIN"
+        echo "[ERROR] 请设置正确的域名，例如:"
+        echo "  export DOMAIN=matrix.example.com"
+        echo "  或在ess-config-template.env中修改DOMAIN配置"
+        exit 1
+    fi
+
+    if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]]; then
+        echo "[ERROR] 域名格式无效: $DOMAIN"
+        echo "[ERROR] 域名应该是有效的格式，如: matrix.example.com"
+        exit 1
+    fi
+
+    echo "[SUCCESS] 配置验证通过"
+    echo "  域名: $DOMAIN"
+    echo "  HTTP端口: $HTTP_PORT"
+    echo "  HTTPS端口: $HTTPS_PORT"
+    echo "  联邦端口: $FEDERATION_PORT"
+}
+
+# 调用配置验证
+validate_config
 
 # 颜色输出
 RED='\033[0;31m'
@@ -379,7 +426,10 @@ show_access_info() {
 # 主函数
 main() {
     print_info "开始ESS外部Nginx反代部署..."
-    
+
+    # 首先验证配置
+    validate_config
+
     check_root
     check_requirements
     install_dependencies
@@ -392,7 +442,7 @@ main() {
     deploy_ess
     verify_deployment
     show_access_info
-    
+
     print_success "ESS外部Nginx反代部署完成!"
 }
 
