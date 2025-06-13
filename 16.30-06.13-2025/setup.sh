@@ -210,28 +210,31 @@ collect_config() {
         print_error "请输入有效的域名格式"
     done
 
-    # Matrix服务器域名 (通常是matrix.主域名)
-    read -p "Matrix服务器域名 [默认: matrix.$MAIN_DOMAIN]: " SERVER_NAME
-    SERVER_NAME=${SERVER_NAME:-matrix.$MAIN_DOMAIN}
+    # 基于主域名自动生成所有子域名
+    print_info "基于主域名 $MAIN_DOMAIN 自动生成子域名:"
 
-    # 子域名配置 - 基于主域名自动生成
-    print_info "子域名配置 (基于主域名 $MAIN_DOMAIN 自动生成):"
+    # 使用标准子域名前缀自动生成
+    WEB_HOST="app.$MAIN_DOMAIN"           # Element Web客户端
+    AUTH_HOST="mas.$MAIN_DOMAIN"          # Matrix Authentication Service
+    RTC_HOST="rtc.$MAIN_DOMAIN"           # Matrix RTC (视频会议)
+    SERVER_NAME="matrix.$MAIN_DOMAIN"     # Matrix服务器名称
+    SYNAPSE_HOST="matrix.$MAIN_DOMAIN"    # Synapse主服务器
 
-    # Element Web域名
-    read -p "Element Web域名 [默认: element.$MAIN_DOMAIN]: " WEB_HOST
-    WEB_HOST=${WEB_HOST:-element.$MAIN_DOMAIN}
+    echo "  Element Web: $WEB_HOST"
+    echo "  认证服务 (MAS): $AUTH_HOST"
+    echo "  RTC服务: $RTC_HOST"
+    echo "  Matrix服务器: $SERVER_NAME"
+    echo "  Synapse: $SYNAPSE_HOST"
+    echo
 
-    # 认证服务域名
-    read -p "认证服务域名 [默认: auth.$MAIN_DOMAIN]: " AUTH_HOST
-    AUTH_HOST=${AUTH_HOST:-auth.$MAIN_DOMAIN}
-
-    # RTC服务域名
-    read -p "RTC服务域名 [默认: rtc.$MAIN_DOMAIN]: " RTC_HOST
-    RTC_HOST=${RTC_HOST:-rtc.$MAIN_DOMAIN}
-
-    # Synapse域名
-    read -p "Synapse域名 [默认: $SERVER_NAME]: " SYNAPSE_HOST
-    SYNAPSE_HOST=${SYNAPSE_HOST:-$SERVER_NAME}
+    if ! confirm "是否使用这些自动生成的域名" "y"; then
+        print_info "请手动输入子域名:"
+        read -p "Element Web域名: " WEB_HOST
+        read -p "认证服务域名: " AUTH_HOST
+        read -p "RTC服务域名: " RTC_HOST
+        read -p "Matrix服务器域名: " SERVER_NAME
+        read -p "Synapse域名: " SYNAPSE_HOST
+    fi
 
     # 端口配置 - 完全动态
     print_info "端口配置:"
@@ -247,33 +250,11 @@ collect_config() {
 
     # 网络配置
     print_info "网络配置:"
+    print_info "公网IP获取方式: DDNS解析 (dig +short ip.$MAIN_DOMAIN)"
+    print_info "遵循需求文档标准方法"
 
-    # 公网IP获取方式选择
-    echo
-    print_info "公网IP获取方式:"
-    echo "  1) DDNS解析 - dig +short ip.$MAIN_DOMAIN (推荐)"
-    echo "  2) 外部服务 - curl ifconfig.me (备用)"
-
-    while true; do
-        read -p "请选择IP获取方式 [1-2, 默认: 1]: " ip_choice
-        ip_choice=${ip_choice:-1}
-
-        case $ip_choice in
-            1)
-                IP_METHOD="ddns"
-                print_info "已选择DDNS解析方式"
-                break
-                ;;
-            2)
-                IP_METHOD="external"
-                print_info "已选择外部服务方式"
-                break
-                ;;
-            *)
-                print_error "请输入 1 或 2"
-                ;;
-        esac
-    done
+    # 固定使用DDNS方式
+    IP_METHOD="ddns"
 
     # 管理员配置
     read -p "管理员用户名 [默认: admin]: " ADMIN_USERNAME
@@ -404,24 +385,11 @@ K3S_VERSION="$K3S_VERSION"
 HELM_VERSION="$HELM_VERSION"
 
 # ==================== 网络配置 ====================
-# IP获取方式
-IP_METHOD="$IP_METHOD"
+# IP获取方式 (固定使用需求文档方法)
+IP_METHOD="ddns"
 
-# 公网IP (根据选择的方式获取)
-EOF
-
-    # 根据IP获取方式生成不同的命令
-    if [[ "$IP_METHOD" == "ddns" ]]; then
-        cat >> "$CONFIG_FILE" << 'EOF'
-PUBLIC_IP="$(dig +short ip.$MAIN_DOMAIN @8.8.8.8 2>/dev/null || dig +short ip.$MAIN_DOMAIN @1.1.1.1 2>/dev/null || echo 'unknown')"
-EOF
-    else
-        cat >> "$CONFIG_FILE" << 'EOF'
-PUBLIC_IP="$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || echo 'unknown')"
-EOF
-    fi
-
-    cat >> "$CONFIG_FILE" << EOF
+# 公网IP (遵循需求文档: dig +short ip.自定义域名 @8.8.8.8 或 @1.1.1.1)
+PUBLIC_IP="\$(dig +short ip.$MAIN_DOMAIN @8.8.8.8 2>/dev/null || dig +short ip.$MAIN_DOMAIN @1.1.1.1 2>/dev/null || echo 'unknown')"
 
 # UDP端口范围 (用于WebRTC)
 UDP_RANGE="30152-30352"
@@ -454,23 +422,15 @@ test_network_connectivity() {
         print_warning "DNS解析可能有问题"
     fi
 
-    # 检测公网IP获取
-    print_info "检测公网IP获取..."
-    if [[ "$IP_METHOD" == "ddns" ]]; then
-        local test_ip=$(dig +short ip.$MAIN_DOMAIN @8.8.8.8 2>/dev/null || dig +short ip.$MAIN_DOMAIN @1.1.1.1 2>/dev/null)
-        if [[ -n "$test_ip" && "$test_ip" != "unknown" ]]; then
-            print_success "DDNS解析成功: $test_ip"
-        else
-            print_warning "DDNS解析失败，可能需要检查域名配置"
-            print_info "请确认 ip.$MAIN_DOMAIN 的A记录已正确配置"
-        fi
+    # 检测公网IP获取 (仅使用需求文档方法)
+    print_info "检测公网IP获取 (DDNS解析方式)..."
+    local test_ip=$(dig +short ip.$MAIN_DOMAIN @8.8.8.8 2>/dev/null || dig +short ip.$MAIN_DOMAIN @1.1.1.1 2>/dev/null)
+    if [[ -n "$test_ip" && "$test_ip" != "unknown" && "$test_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        print_success "DDNS解析成功: $test_ip"
     else
-        local test_ip=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null)
-        if [[ -n "$test_ip" ]]; then
-            print_success "外部IP服务正常: $test_ip"
-        else
-            print_warning "外部IP服务访问失败"
-        fi
+        print_warning "DDNS解析失败，需要检查域名配置"
+        print_info "请确认 ip.$MAIN_DOMAIN 的A记录已正确配置"
+        print_info "测试命令: dig +short ip.$MAIN_DOMAIN @8.8.8.8"
     fi
 
     # 检测域名解析

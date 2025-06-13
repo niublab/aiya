@@ -76,11 +76,16 @@ sudo ./setup.sh
 
 ### 配置示例
 ```
-Matrix服务器域名: matrix.example.com
-Element Web域名: [默认: element.example.com]
-认证服务域名: [默认: auth.example.com]  
-RTC服务域名: [默认: rtc.example.com]
-Synapse域名: [默认: matrix.example.com]
+主域名: example.com
+
+自动生成的子域名:
+  Element Web: app.example.com
+  认证服务 (MAS): mas.example.com
+  RTC服务: rtc.example.com
+  Matrix服务器: matrix.example.com
+  Synapse: matrix.example.com
+
+其他配置:
 安装目录: [默认: /opt/matrix]
 HTTP端口: [默认: 8080]
 HTTPS端口: [默认: 8443]
