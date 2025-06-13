@@ -448,11 +448,37 @@ deploy_ess() {
 
 wait_for_pods() {
     print_step "等待服务启动"
-    
-    print_info "等待所有Pod就绪..."
-    k3s kubectl wait --for=condition=ready pod --all -n ess --timeout=600s
-    
-    print_success "所有服务已启动"
+
+    print_info "等待长期运行的Pod就绪..."
+
+    # 只等待长期运行的Pod，排除Job Pod
+    # 等待Deployment Pod
+    if k3s kubectl get deployment -n ess &>/dev/null; then
+        print_info "等待Deployment Pod就绪..."
+        k3s kubectl wait --for=condition=ready pod -l 'app.kubernetes.io/component!=job' -n ess --timeout=600s 2>/dev/null || {
+            print_warning "部分Pod可能仍在启动中，检查具体状态..."
+            k3s kubectl get pods -n ess
+        }
+    fi
+
+    # 等待StatefulSet Pod
+    if k3s kubectl get statefulset -n ess &>/dev/null; then
+        print_info "等待StatefulSet Pod就绪..."
+        k3s kubectl wait --for=condition=ready pod -l 'app.kubernetes.io/component=statefulset' -n ess --timeout=300s 2>/dev/null || true
+    fi
+
+    # 检查Job Pod状态（应该是Completed）
+    print_info "检查Job Pod状态..."
+    local job_pods=$(k3s kubectl get pods -n ess -l 'app.kubernetes.io/component=job' --no-headers 2>/dev/null | wc -l)
+    if [[ $job_pods -gt 0 ]]; then
+        k3s kubectl get pods -n ess -l 'app.kubernetes.io/component=job'
+    fi
+
+    # 显示最终状态
+    print_info "当前Pod状态:"
+    k3s kubectl get pods -n ess
+
+    print_success "服务启动检查完成"
 }
 
 create_admin_user() {
