@@ -739,6 +739,11 @@ EOF
 
     print_success "ESS配置文件已生成: $values_file"
     print_info "配置基于ESS官方最新规范，包含所有自定义端口和域名"
+
+    # 如果用户配置了自定义端口，按ESS官方推荐方式配置外部反向代理
+    if [[ "$HTTP_PORT" != "80" ]] || [[ "$HTTPS_PORT" != "443" ]]; then
+        setup_external_reverse_proxy
+    fi
 }
 
 # ==================== 主程序 ====================
@@ -960,6 +965,323 @@ main() {
                 ;;
         esac
     done
+}
+
+# ==================== ESS官方推荐的外部反向代理配置 ====================
+
+setup_external_reverse_proxy() {
+    print_step "配置外部反向代理 (ESS官方推荐方式)"
+
+    print_info "ESS官方推荐架构:"
+    echo "  Internet (自定义端口) → Nginx (SSL终止) → Traefik (标准端口) → ESS Services"
+    echo
+
+    # 安装Nginx
+    install_nginx_for_ess
+
+    # 生成ESS外部SSL配置
+    generate_ess_external_ssl_config
+
+    # 生成Nginx配置
+    generate_nginx_reverse_proxy_config
+
+    # 配置Nginx
+    configure_nginx_for_ess
+}
+
+install_nginx_for_ess() {
+    print_info "安装Nginx (ESS外部反向代理)..."
+
+    # 检测操作系统
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        local os_id=$ID
+    else
+        print_error "无法检测操作系统"
+        return 1
+    fi
+
+    # 安装Nginx
+    case $os_id in
+        ubuntu|debian)
+            apt-get update
+            apt-get install -y nginx openssl
+            ;;
+        centos|rhel|rocky|almalinux)
+            if command -v dnf &> /dev/null; then
+                dnf install -y nginx openssl
+            else
+                yum install -y nginx openssl
+            fi
+            ;;
+        *)
+            print_error "不支持的操作系统: $os_id"
+            return 1
+            ;;
+    esac
+
+    print_success "Nginx安装完成"
+}
+
+generate_ess_external_ssl_config() {
+    print_info "生成ESS外部SSL配置文件..."
+
+    local external_ssl_config="$INSTALL_DIR/ess-external-ssl.yaml"
+
+    cat > "$external_ssl_config" << EOF
+# ESS外部SSL配置 (官方推荐方式)
+# 当使用外部反向代理处理SSL时使用此配置
+# 参考: charts/matrix-stack/ci/fragments/quick-setup-external-cert.yaml
+
+# 禁用ESS内部TLS，由外部反向代理处理
+ingress:
+  tlsEnabled: false
+
+# 其他配置保持不变，ESS内部使用HTTP通信
+# Traefik将在8080端口提供HTTP服务给外部反向代理
+EOF
+
+    print_success "ESS外部SSL配置生成: $external_ssl_config"
+    print_info "此配置将禁用ESS内部TLS，由Nginx处理SSL终止"
+}
+
+generate_nginx_reverse_proxy_config() {
+    print_info "生成Nginx反向代理配置 (ESS官方推荐)..."
+
+    local nginx_config="$INSTALL_DIR/nginx-ess-reverse-proxy.conf"
+
+    cat > "$nginx_config" << EOF
+# ESS官方推荐的Nginx反向代理配置
+# 架构: Internet → Nginx (SSL终止) → Traefik (8080) → ESS Services
+# 生成时间: $(date)
+
+# HTTP重定向到HTTPS
+server {
+    listen $HTTP_PORT;
+    listen [::]:$HTTP_PORT;
+    server_name $WEB_HOST $AUTH_HOST $RTC_HOST $SYNAPSE_HOST $SERVER_NAME;
+
+    # 重定向到HTTPS (保持自定义端口)
+    return 301 https://\$host:$HTTPS_PORT\$request_uri;
+}
+
+# HTTPS反向代理主配置 (SSL终止)
+server {
+    listen $HTTPS_PORT ssl http2;
+    listen [::]:$HTTPS_PORT ssl http2;
+
+    server_name $WEB_HOST $AUTH_HOST $RTC_HOST $SYNAPSE_HOST $SERVER_NAME;
+
+    # SSL配置选项 (用户可选择)
+    # 选项1: 使用Let's Encrypt证书 (如果已申请) - 推荐
+    # ssl_certificate /etc/letsencrypt/live/$SERVER_NAME/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/$SERVER_NAME/privkey.pem;
+
+    # 选项2: 使用自定义证书
+    # ssl_certificate /etc/ssl/certs/ess-custom.crt;
+    # ssl_certificate_key /etc/ssl/private/ess-custom.key;
+
+    # 选项3: 使用临时自签名证书 (默认)
+    ssl_certificate /etc/nginx/ssl/ess-selfsigned.crt;
+    ssl_certificate_key /etc/nginx/ssl/ess-selfsigned.key;
+
+    # SSL安全配置 (ESS官方推荐)
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    # 安全头 (Matrix推荐)
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # 日志配置
+    access_log /var/log/nginx/ess-access.log;
+    error_log /var/log/nginx/ess-error.log;
+
+    # 反向代理到Traefik (ESS官方推荐方式)
+    location / {
+        # 转发到K3s Traefik HTTP端口 (官方推荐)
+        proxy_pass http://127.0.0.1:8080;
+
+        # 代理头设置 (ESS官方示例)
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port $HTTPS_PORT;
+
+        # WebSocket支持 (Element Web需要)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        # 超时和缓冲设置 (ESS官方推荐)
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 86400s;  # 长连接支持
+        proxy_buffering off;
+        proxy_request_buffering off;
+
+        # Matrix文件上传限制
+        client_max_body_size 50M;
+    }
+}
+
+# Matrix联邦端口配置 (如果使用自定义端口)
+server {
+    listen $FEDERATION_PORT ssl http2;
+    listen [::]:$FEDERATION_PORT ssl http2;
+
+    server_name $SYNAPSE_HOST $SERVER_NAME;
+
+    # 使用相同的SSL证书
+    ssl_certificate /etc/nginx/ssl/ess-selfsigned.crt;
+    ssl_certificate_key /etc/nginx/ssl/ess-selfsigned.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+
+    # 联邦流量转发到Traefik
+    location / {
+        # 转发到Traefik，依赖Traefik路由到正确的联邦端点
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        # 联邦超时设置
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 30s;
+    }
+}
+EOF
+
+    print_success "Nginx反向代理配置生成: $nginx_config"
+}
+
+configure_nginx_for_ess() {
+    print_info "配置Nginx反向代理..."
+
+    # 创建SSL目录
+    mkdir -p /etc/nginx/ssl
+
+    # 生成临时自签名证书 (如果不存在)
+    if [[ ! -f /etc/nginx/ssl/ess-selfsigned.crt ]]; then
+        print_info "生成临时自签名SSL证书..."
+        print_warning "注意: 这是临时证书，建议后续配置正式证书"
+
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout /etc/nginx/ssl/ess-selfsigned.key \
+            -out /etc/nginx/ssl/ess-selfsigned.crt \
+            -subj "/C=US/ST=State/L=City/O=Matrix ESS Community/CN=$SERVER_NAME" \
+            -extensions v3_req \
+            -config <(cat <<EOF
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+C=US
+ST=State
+L=City
+O=Matrix ESS Community
+CN=$SERVER_NAME
+
+[v3_req]
+keyUsage = keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = $SERVER_NAME
+DNS.2 = $WEB_HOST
+DNS.3 = $AUTH_HOST
+DNS.4 = $RTC_HOST
+DNS.5 = $SYNAPSE_HOST
+EOF
+)
+        print_success "临时SSL证书生成完成"
+    fi
+
+    # 备份原配置
+    if [[ -f /etc/nginx/nginx.conf ]]; then
+        cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup.$(date +%Y%m%d_%H%M%S)
+    fi
+
+    # 复制ESS反向代理配置
+    cp "$INSTALL_DIR/nginx-ess-reverse-proxy.conf" /etc/nginx/sites-available/ess-reverse-proxy 2>/dev/null || \
+    cp "$INSTALL_DIR/nginx-ess-reverse-proxy.conf" /etc/nginx/conf.d/ess-reverse-proxy.conf
+
+    # 启用站点 (Ubuntu/Debian)
+    if [[ -d /etc/nginx/sites-enabled ]]; then
+        ln -sf /etc/nginx/sites-available/ess-reverse-proxy /etc/nginx/sites-enabled/
+        # 禁用默认站点以避免冲突
+        rm -f /etc/nginx/sites-enabled/default
+    fi
+
+    # 测试配置
+    if nginx -t; then
+        print_success "Nginx配置测试通过"
+    else
+        print_error "Nginx配置测试失败"
+        return 1
+    fi
+
+    # 启动Nginx服务
+    systemctl enable nginx
+    systemctl restart nginx
+
+    if systemctl is-active --quiet nginx; then
+        print_success "Nginx反向代理启动成功"
+
+        # 显示配置信息
+        show_reverse_proxy_info
+
+        # 记录配置状态
+        echo "NGINX_REVERSE_PROXY=true" >> "$CONFIG_FILE"
+        echo "NGINX_CONFIG_PATH=/etc/nginx/sites-available/ess-reverse-proxy" >> "$CONFIG_FILE"
+        echo "ESS_EXTERNAL_SSL=true" >> "$CONFIG_FILE"
+    else
+        print_error "Nginx反向代理启动失败"
+        return 1
+    fi
+}
+
+show_reverse_proxy_info() {
+    echo
+    print_success "ESS外部反向代理配置完成！"
+    echo
+    print_info "架构说明 (ESS官方推荐):"
+    echo "  Internet → Nginx (端口 $HTTP_PORT/$HTTPS_PORT) → Traefik (端口 8080/8443) → ESS Services"
+    echo
+    print_info "访问地址:"
+    echo "  Element Web: https://$WEB_HOST:$HTTPS_PORT"
+    echo "  认证服务: https://$AUTH_HOST:$HTTPS_PORT"
+    echo "  RTC服务: https://$RTC_HOST:$HTTPS_PORT"
+    echo "  Synapse: https://$SYNAPSE_HOST:$HTTPS_PORT"
+    echo
+    print_info "SSL证书配置:"
+    echo "  当前使用: 临时自签名证书"
+    echo "  推荐配置: Let's Encrypt或自定义证书"
+    echo
+    print_warning "SSL证书选项 (编辑 /etc/nginx/sites-available/ess-reverse-proxy):"
+    echo "  1. Let's Encrypt: 取消注释 letsencrypt 行"
+    echo "  2. 自定义证书: 取消注释 custom 行并配置路径"
+    echo "  3. 保持当前: 使用临时自签名证书"
+    echo
+    print_success "✅ 如果已有Let's Encrypt证书，可以直接使用，无需删除！"
+    echo "     只需编辑配置文件，取消注释对应的ssl_certificate行即可"
+    echo
+    print_info "配置文件位置:"
+    echo "  Nginx配置: /etc/nginx/sites-available/ess-reverse-proxy"
+    echo "  ESS外部SSL: $INSTALL_DIR/ess-external-ssl.yaml"
 }
 
 # 运行主程序
