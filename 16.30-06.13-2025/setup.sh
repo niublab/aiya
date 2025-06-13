@@ -611,16 +611,38 @@ matrixRTC:
     enabled: true
     type: "livekit"
 
-  # WebRTC端口配置
+    # LiveKit配置 (遵循需求文档UDP端口范围)
+    config:
+      # WebRTC配置
+      rtc:
+        # UDP端口范围 (需求文档指定: 30152-30352)
+        port_range_start: 30152
+        port_range_end: 30352
+
+        # TCP端口 (ICE/TCP fallback)
+        tcp_port: $WEBRTC_TCP_PORT
+
+        # UDP单端口模式 (可选，与port_range互斥)
+        # udp_port: $WEBRTC_UDP_PORT
+
+      # API端口配置
+      port: 7880
+
+  # 服务端口配置
   service:
     type: NodePort
     ports:
-      tcp:
+      # API/WebSocket端口
+      http:
         port: 7880
         nodePort: $WEBRTC_TCP_PORT
+
+      # UDP端口范围需要通过hostNetwork暴露
+      # 这里只配置主要的UDP端口
       udp:
-        port: 7881
-        nodePort: $WEBRTC_UDP_PORT
+        port: 30152
+        nodePort: 30152
+        protocol: UDP
 
 # ==================== Synapse配置 ====================
 synapse:
@@ -714,6 +736,38 @@ service:
     federation:
       port: 8448
       nodePort: $NODEPORT_FEDERATION
+
+# ==================== 网络策略配置 ====================
+# UDP端口范围配置 (需求文档: 30152-30352)
+networkPolicy:
+  enabled: true
+
+  # 允许UDP端口范围入站流量
+  ingress:
+    - from: []
+      ports:
+        - protocol: UDP
+          port: 30152
+          endPort: 30352
+        - protocol: TCP
+          port: $WEBRTC_TCP_PORT
+        - protocol: UDP
+          port: $WEBRTC_UDP_PORT
+
+# ==================== 主机网络配置 ====================
+# LiveKit需要主机网络来暴露UDP端口范围
+hostNetwork:
+  enabled: true
+
+  # UDP端口范围配置
+  udpPortRange:
+    start: 30152
+    end: 30352
+
+  # 固定端口配置
+  fixedPorts:
+    tcp: $WEBRTC_TCP_PORT
+    udp: $WEBRTC_UDP_PORT
 EOF
 
     print_success "ESS配置文件已生成: $values_file"
