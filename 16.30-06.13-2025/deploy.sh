@@ -341,6 +341,20 @@ generate_ess_values() {
 
     print_warning "未找到完整配置，生成简化版本（可能不完整）"
 
+    # 验证必要的变量是否存在
+    if [[ -z "${SERVER_NAME:-}" ]]; then
+        print_error "SERVER_NAME变量未设置，无法生成配置"
+        print_info "请确保配置文件正确加载"
+        return 1
+    fi
+
+    print_info "使用变量生成简化配置:"
+    print_info "  SERVER_NAME: ${SERVER_NAME:-未设置}"
+    print_info "  WEB_HOST: ${WEB_HOST:-未设置}"
+    print_info "  AUTH_HOST: ${AUTH_HOST:-未设置}"
+    print_info "  RTC_HOST: ${RTC_HOST:-未设置}"
+    print_info "  SYNAPSE_HOST: ${SYNAPSE_HOST:-未设置}"
+
     cat > "$values_file" << EOF
 # Matrix ESS Community 配置文件 (简化版本)
 # 严格基于ESS官方schema $ESS_VERSION
@@ -551,6 +565,7 @@ main() {
         deploy_cert_manager
     fi
 
+    generate_ess_values
     deploy_ess
     wait_for_pods
     create_admin_user
