@@ -335,14 +335,14 @@ collect_config() {
     # 端口配置 - 完全动态
     print_info "端口配置:"
 
-    read -p "HTTP端口 [默认: 8080]: " HTTP_PORT
-    HTTP_PORT=${HTTP_PORT:-8080}
+    read -p "HTTP端口 [默认: $DEFAULT_HTTP_PORT]: " HTTP_PORT
+    HTTP_PORT=${HTTP_PORT:-$DEFAULT_HTTP_PORT}
 
-    read -p "HTTPS端口 [默认: 8443]: " HTTPS_PORT
-    HTTPS_PORT=${HTTPS_PORT:-8443}
+    read -p "HTTPS端口 [默认: $DEFAULT_HTTPS_PORT]: " HTTPS_PORT
+    HTTPS_PORT=${HTTPS_PORT:-$DEFAULT_HTTPS_PORT}
 
-    read -p "联邦端口 [默认: 8448]: " FEDERATION_PORT
-    FEDERATION_PORT=${FEDERATION_PORT:-8448}
+    read -p "联邦端口 [默认: $DEFAULT_FEDERATION_PORT]: " FEDERATION_PORT
+    FEDERATION_PORT=${FEDERATION_PORT:-$DEFAULT_FEDERATION_PORT}
 
     # 网络配置
     print_info "网络配置:"
@@ -458,9 +458,9 @@ HTTPS_PORT="$HTTPS_PORT"       # HTTPS访问端口
 FEDERATION_PORT="$FEDERATION_PORT"  # Matrix联邦端口
 
 # NodePort端口配置 (Kubernetes对外暴露)
-NODEPORT_HTTP="30080"          # HTTP NodePort
-NODEPORT_HTTPS="30443"         # HTTPS NodePort
-NODEPORT_FEDERATION="30448"    # 联邦 NodePort
+NODEPORT_HTTP="$DEFAULT_NODEPORT_HTTP"          # HTTP NodePort
+NODEPORT_HTTPS="$DEFAULT_NODEPORT_HTTPS"         # HTTPS NodePort
+NODEPORT_FEDERATION="$DEFAULT_NODEPORT_FEDERATION"    # 联邦 NodePort
 
 # WebRTC端口配置 (标准配置 - 推荐)
 WEBRTC_TCP_PORT="30881"        # WebRTC TCP端口 (ICE/TCP fallback)
@@ -1029,11 +1029,11 @@ generate_nginx_reverse_proxy_config() {
             print_info "检测到Traefik ClusterIP: $traefik_cluster_ip"
         else
             print_warning "无法获取Traefik ClusterIP，使用默认配置"
-            traefik_cluster_ip="127.0.0.1:8080"
+            traefik_cluster_ip="127.0.0.1"
         fi
     else
         print_warning "kubectl未安装，使用默认配置"
-        traefik_cluster_ip="127.0.0.1:8080"
+        traefik_cluster_ip="127.0.0.1"
     fi
 
     local nginx_config="$INSTALL_DIR/nginx-ess-reverse-proxy.conf"
@@ -1093,7 +1093,7 @@ server {
     # 反向代理到Traefik (ESS官方推荐方式)
     location / {
         # 转发到K3s Traefik HTTP端口 (官方推荐)
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://$traefik_cluster_ip:80;
 
         # 代理头设置 (ESS官方示例)
         proxy_set_header Host \$host;
@@ -1248,7 +1248,7 @@ show_reverse_proxy_info() {
     print_success "ESS外部反向代理配置完成！"
     echo
     print_info "架构说明 (ESS官方推荐):"
-    echo "  Internet → Nginx (端口 $HTTP_PORT/$HTTPS_PORT) → Traefik (端口 8080/8443) → ESS Services"
+    echo "  Internet → Nginx (端口 $HTTP_PORT/$HTTPS_PORT) → Traefik (端口 80/443) → ESS Services"
     echo
     print_info "访问地址:"
     echo "  Element Web: https://$WEB_HOST:$HTTPS_PORT"

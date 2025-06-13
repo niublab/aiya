@@ -407,8 +407,8 @@ synapse:
 wellKnownDelegation:
   enabled: true
   additional:
-    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST:${HTTPS_PORT:-443}"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST:${HTTPS_PORT:-443}/","account":"https://$AUTH_HOST:${HTTPS_PORT:-443}/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST:${HTTPS_PORT:-443}"}]}'
-    server: '{"m.server":"$SYNAPSE_HOST:${FEDERATION_PORT:-443}"}'
+    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST:${HTTPS_PORT:-8443}"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST:${HTTPS_PORT:-8443}/","account":"https://$AUTH_HOST:${HTTPS_PORT:-8443}/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST:${HTTPS_PORT:-8443}"}]}'
+    server: '{"m.server":"$SYNAPSE_HOST:${FEDERATION_PORT:-8448}"}'
 EOF
 
     print_warning "ESS配置文件已生成（简化版本）: $values_file"
