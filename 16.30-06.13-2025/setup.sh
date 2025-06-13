@@ -1021,6 +1021,21 @@ install_nginx_for_ess() {
 generate_nginx_reverse_proxy_config() {
     print_info "生成Nginx反向代理配置 (ESS官方推荐)..."
 
+    # 动态获取Traefik ClusterIP (用于8448联邦端口)
+    local traefik_cluster_ip=""
+    if command -v kubectl >/dev/null 2>&1; then
+        traefik_cluster_ip=$(kubectl get svc traefik -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
+        if [[ -n "$traefik_cluster_ip" ]]; then
+            print_info "检测到Traefik ClusterIP: $traefik_cluster_ip"
+        else
+            print_warning "无法获取Traefik ClusterIP，使用默认配置"
+            traefik_cluster_ip="127.0.0.1:8080"
+        fi
+    else
+        print_warning "kubectl未安装，使用默认配置"
+        traefik_cluster_ip="127.0.0.1:8080"
+    fi
+
     local nginx_config="$INSTALL_DIR/nginx-ess-reverse-proxy.conf"
 
     cat > "$nginx_config" << EOF
@@ -1118,10 +1133,11 @@ server {
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
 
-    # 联邦流量转发到Traefik
+    # 联邦流量转发到Traefik (动态获取ClusterIP)
     location / {
-        # 转发到Traefik，依赖Traefik路由到正确的联邦端点
-        proxy_pass http://127.0.0.1:8080;
+        # 直接转发到Traefik HTTPS端口，避免重定向问题
+        # 使用动态获取的Traefik ClusterIP
+        proxy_pass https://$traefik_cluster_ip:443;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
