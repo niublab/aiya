@@ -120,17 +120,72 @@ check_domain() {
 # 检查端口配置
 check_ports() {
     print_info "检查端口配置..."
-    
+
     print_success "HTTP端口: $HTTP_PORT"
     print_success "HTTPS端口: $HTTPS_PORT"
     print_success "联邦端口: $FEDERATION_PORT"
-    
+
     # 检查端口冲突
     if [[ "$HTTP_PORT" == "$HTTPS_PORT" ]]; then
         print_error "HTTP和HTTPS端口不能相同"
         return 1
     fi
-    
+
+    return 0
+}
+
+# 检查证书配置
+check_certificate() {
+    print_info "检查证书配置..."
+
+    local cert_type="${CERT_TYPE:-letsencrypt}"
+    local test_mode="${TEST_MODE:-false}"
+
+    if [[ "$test_mode" == "true" ]]; then
+        print_warning "测试模式已启用"
+        cert_type="letsencrypt-staging"
+    fi
+
+    case "$cert_type" in
+        "letsencrypt")
+            print_success "证书类型: Let's Encrypt 生产证书"
+            print_info "需要: 域名正确解析到服务器，80端口可访问"
+            ;;
+        "letsencrypt-staging")
+            print_warning "证书类型: Let's Encrypt 测试证书"
+            print_warning "浏览器会显示不安全警告"
+            ;;
+        "self-signed")
+            print_warning "证书类型: 自签名证书"
+            print_warning "浏览器会显示不安全警告"
+            print_info "优点: 无需域名解析，适合内网测试"
+            ;;
+        "custom")
+            print_info "证书类型: 自定义证书"
+            local custom_cert="${CUSTOM_CERT_PATH:-/etc/ssl/certs/$DOMAIN.crt}"
+            local custom_key="${CUSTOM_KEY_PATH:-/etc/ssl/private/$DOMAIN.key}"
+
+            if [[ -f "$custom_cert" ]]; then
+                print_success "证书文件存在: $custom_cert"
+            else
+                print_error "证书文件不存在: $custom_cert"
+                return 1
+            fi
+
+            if [[ -f "$custom_key" ]]; then
+                print_success "私钥文件存在: $custom_key"
+            else
+                print_error "私钥文件不存在: $custom_key"
+                return 1
+            fi
+            ;;
+        *)
+            print_error "不支持的证书类型: $cert_type"
+            print_info "支持的类型: letsencrypt, letsencrypt-staging, self-signed, custom"
+            return 1
+            ;;
+    esac
+
     return 0
 }
 
@@ -201,11 +256,15 @@ main() {
     if ! check_domain; then
         ((total_errors++))
     fi
-    
+
     if ! check_ports; then
         ((total_errors++))
     fi
-    
+
+    if ! check_certificate; then
+        ((total_errors++))
+    fi
+
     check_dns
     
     echo

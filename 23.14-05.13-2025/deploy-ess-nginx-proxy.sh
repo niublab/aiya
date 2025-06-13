@@ -198,20 +198,175 @@ install_helm() {
 # 生成SSL证书
 generate_ssl_certificates() {
     print_info "生成SSL证书..."
-    
+
+    # 设置默认值
+    local cert_type="${CERT_TYPE:-letsencrypt}"
+    local test_mode="${TEST_MODE:-false}"
+    local cert_email="${CERT_EMAIL:-admin@$DOMAIN}"
+
+    # 如果启用测试模式，自动使用staging证书
+    if [[ "$test_mode" == "true" ]]; then
+        cert_type="letsencrypt-staging"
+        print_warning "测试模式已启用，将使用Let's Encrypt Staging证书"
+        print_warning "Staging证书不被浏览器信任，仅用于测试目的"
+    fi
+
+    case "$cert_type" in
+        "letsencrypt")
+            generate_letsencrypt_cert "$cert_email" ""
+            ;;
+        "letsencrypt-staging")
+            generate_letsencrypt_cert "$cert_email" "--staging"
+            ;;
+        "self-signed")
+            generate_self_signed_cert
+            ;;
+        "custom")
+            use_custom_cert
+            ;;
+        *)
+            print_error "不支持的证书类型: $cert_type"
+            print_info "支持的类型: letsencrypt, letsencrypt-staging, self-signed, custom"
+            exit 1
+            ;;
+    esac
+
+    print_success "SSL证书配置完成"
+}
+
+# 生成Let's Encrypt证书
+generate_letsencrypt_cert() {
+    local email="$1"
+    local staging_flag="$2"
+
+    if [[ -n "$staging_flag" ]]; then
+        print_info "生成Let's Encrypt Staging证书..."
+    else
+        print_info "生成Let's Encrypt生产证书..."
+    fi
+
     # 停止nginx以释放80端口
     systemctl stop nginx || true
-    
+
     # 生成证书
-    certbot certonly --standalone --agree-tos --no-eff-email \
-        --email "admin@$DOMAIN" \
-        -d "$DOMAIN" \
-        -d "app.$DOMAIN" \
-        -d "mas.$DOMAIN" \
-        -d "rtc.$DOMAIN" \
-        -d "matrix.$DOMAIN"
-    
-    print_success "SSL证书生成完成"
+    local certbot_cmd="certbot certonly --standalone --agree-tos --no-eff-email"
+    certbot_cmd="$certbot_cmd --email \"$email\""
+    certbot_cmd="$certbot_cmd -d \"$DOMAIN\""
+    certbot_cmd="$certbot_cmd -d \"app.$DOMAIN\""
+    certbot_cmd="$certbot_cmd -d \"mas.$DOMAIN\""
+    certbot_cmd="$certbot_cmd -d \"rtc.$DOMAIN\""
+    certbot_cmd="$certbot_cmd -d \"matrix.$DOMAIN\""
+
+    if [[ -n "$staging_flag" ]]; then
+        certbot_cmd="$certbot_cmd $staging_flag"
+    fi
+
+    if eval "$certbot_cmd"; then
+        print_success "Let's Encrypt证书生成成功"
+        if [[ -n "$staging_flag" ]]; then
+            print_warning "注意: 这是测试证书，浏览器会显示不安全警告"
+        fi
+    else
+        print_error "Let's Encrypt证书生成失败"
+        exit 1
+    fi
+}
+
+# 生成自签名证书
+generate_self_signed_cert() {
+    print_info "生成自签名证书..."
+    print_warning "自签名证书仅用于测试，浏览器会显示不安全警告"
+
+    local cert_dir="/etc/letsencrypt/live/$DOMAIN"
+    local days="${SELF_SIGNED_DAYS:-365}"
+    local country="${SELF_SIGNED_COUNTRY:-CN}"
+    local state="${SELF_SIGNED_STATE:-Beijing}"
+    local city="${SELF_SIGNED_CITY:-Beijing}"
+    local org="${SELF_SIGNED_ORG:-Matrix Server}"
+
+    # 创建证书目录
+    mkdir -p "$cert_dir"
+
+    # 生成私钥
+    openssl genrsa -out "$cert_dir/privkey.pem" 2048
+
+    # 创建证书配置文件
+    cat > "/tmp/cert.conf" << EOF
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+C = $country
+ST = $state
+L = $city
+O = $org
+CN = $DOMAIN
+
+[v3_req]
+keyUsage = keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = $DOMAIN
+DNS.2 = app.$DOMAIN
+DNS.3 = mas.$DOMAIN
+DNS.4 = rtc.$DOMAIN
+DNS.5 = matrix.$DOMAIN
+EOF
+
+    # 生成证书
+    openssl req -new -x509 -key "$cert_dir/privkey.pem" \
+        -out "$cert_dir/fullchain.pem" \
+        -days "$days" \
+        -config "/tmp/cert.conf" \
+        -extensions v3_req
+
+    # 设置权限
+    chmod 600 "$cert_dir/privkey.pem"
+    chmod 644 "$cert_dir/fullchain.pem"
+
+    # 清理临时文件
+    rm -f "/tmp/cert.conf"
+
+    print_success "自签名证书生成完成"
+    print_info "证书有效期: $days 天"
+    print_warning "请在浏览器中手动信任此证书"
+}
+
+# 使用自定义证书
+use_custom_cert() {
+    print_info "使用自定义证书..."
+
+    local custom_cert="${CUSTOM_CERT_PATH:-/etc/ssl/certs/$DOMAIN.crt}"
+    local custom_key="${CUSTOM_KEY_PATH:-/etc/ssl/private/$DOMAIN.key}"
+    local cert_dir="/etc/letsencrypt/live/$DOMAIN"
+
+    # 检查证书文件是否存在
+    if [[ ! -f "$custom_cert" ]]; then
+        print_error "自定义证书文件不存在: $custom_cert"
+        exit 1
+    fi
+
+    if [[ ! -f "$custom_key" ]]; then
+        print_error "自定义私钥文件不存在: $custom_key"
+        exit 1
+    fi
+
+    # 创建证书目录
+    mkdir -p "$cert_dir"
+
+    # 复制证书文件
+    cp "$custom_cert" "$cert_dir/fullchain.pem"
+    cp "$custom_key" "$cert_dir/privkey.pem"
+
+    # 设置权限
+    chmod 600 "$cert_dir/privkey.pem"
+    chmod 644 "$cert_dir/fullchain.pem"
+
+    print_success "自定义证书配置完成"
 }
 
 # 配置Nginx

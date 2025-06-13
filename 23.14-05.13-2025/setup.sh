@@ -183,9 +183,10 @@ show_menu() {
     echo -e "${CYAN}1)${NC} ESS-Helm外部Nginx反代方案"
     echo -e "${CYAN}2)${NC} IP自动更新系统"
     echo -e "${CYAN}3)${NC} 完整部署 (ESS + IP更新系统)"
-    echo -e "${CYAN}4)${NC} 检查配置"
-    echo -e "${CYAN}5)${NC} 仅下载文件到本地"
-    echo -e "${CYAN}6)${NC} 显示帮助信息"
+    echo -e "${CYAN}4)${NC} 测试模式部署 (使用测试证书)"
+    echo -e "${CYAN}5)${NC} 检查配置"
+    echo -e "${CYAN}6)${NC} 仅下载文件到本地"
+    echo -e "${CYAN}7)${NC} 显示帮助信息"
     echo -e "${CYAN}0)${NC} 退出"
     echo
 }
@@ -341,15 +342,15 @@ deploy_ip_updater() {
 # 完整部署
 deploy_full() {
     log "STEP" "开始完整部署..."
-    
+
     # 先部署ESS
     if deploy_ess; then
         log "SUCCESS" "ESS部署完成，继续安装IP更新系统..."
-        
+
         # 再部署IP更新系统
         if deploy_ip_updater; then
             log "SUCCESS" "完整部署成功!"
-            
+
             # 配置IP更新系统管理ESS服务
             log "INFO" "配置IP更新系统管理ESS服务..."
             if [[ -f "/opt/ip-updater/config/ip-update.conf" ]]; then
@@ -363,6 +364,80 @@ deploy_full() {
         fi
     else
         log "ERROR" "ESS部署失败"
+        return 1
+    fi
+}
+
+# 测试模式部署
+deploy_test() {
+    log "STEP" "开始测试模式部署..."
+    log "WARNING" "测试模式将使用Let's Encrypt Staging证书或自签名证书"
+    log "WARNING" "浏览器会显示不安全警告，这是正常的"
+
+    # 配置环境变量
+    configure_environment
+
+    # 设置测试模式
+    export TEST_MODE="true"
+    export CERT_TYPE="${CERT_TYPE:-letsencrypt-staging}"
+
+    # 询问证书类型
+    echo
+    log "INFO" "选择测试证书类型:"
+    echo "  1) Let's Encrypt Staging (推荐，需要域名解析)"
+    echo "  2) 自签名证书 (无需域名解析)"
+    echo
+    read -p "请选择 [1-2]: " cert_choice
+
+    case "$cert_choice" in
+        "1")
+            export CERT_TYPE="letsencrypt-staging"
+            log "INFO" "将使用Let's Encrypt Staging证书"
+            ;;
+        "2")
+            export CERT_TYPE="self-signed"
+            log "INFO" "将使用自签名证书"
+            ;;
+        *)
+            log "WARNING" "无效选择，使用默认的Staging证书"
+            export CERT_TYPE="letsencrypt-staging"
+            ;;
+    esac
+
+    # 设置执行权限
+    chmod +x deploy-ess-nginx-proxy.sh
+
+    # 导出环境变量供子脚本使用
+    export DOMAIN="${DOMAIN:-your-domain.com}"
+    export HTTP_PORT="${HTTP_PORT:-8080}"
+    export HTTPS_PORT="${HTTPS_PORT:-8443}"
+    export FEDERATION_PORT="${FEDERATION_PORT:-8448}"
+
+    log "INFO" "使用测试配置:"
+    log "INFO" "  域名: $DOMAIN"
+    log "INFO" "  证书类型: $CERT_TYPE"
+    log "INFO" "  测试模式: $TEST_MODE"
+
+    # 最后验证关键配置
+    if [[ "$DOMAIN" == "your-domain.com" ]]; then
+        log "ERROR" "域名仍为默认值，请设置正确的域名"
+        return 1
+    fi
+
+    # 运行部署脚本
+    log "INFO" "开始测试模式部署..."
+    if env DOMAIN="$DOMAIN" \
+           HTTP_PORT="$HTTP_PORT" \
+           HTTPS_PORT="$HTTPS_PORT" \
+           FEDERATION_PORT="$FEDERATION_PORT" \
+           TEST_MODE="$TEST_MODE" \
+           CERT_TYPE="$CERT_TYPE" \
+           ./deploy-ess-nginx-proxy.sh; then
+        log "SUCCESS" "测试模式部署完成!"
+        log "WARNING" "请注意: 浏览器会显示证书不安全警告"
+        log "INFO" "这是正常的，因为使用的是测试证书"
+    else
+        log "ERROR" "测试模式部署失败"
         return 1
     fi
 }
@@ -416,10 +491,13 @@ show_help() {
     echo "  HTTP_PORT=8080              # HTTP端口"
     echo "  HTTPS_PORT=8443             # HTTPS端口"
     echo "  FEDERATION_PORT=8448        # Matrix联邦端口"
+    echo "  TEST_MODE=true              # 启用测试模式"
+    echo "  CERT_TYPE=self-signed       # 证书类型"
     echo "  DEBUG=true                  # 启用调试模式"
     echo "  AUTO_DEPLOY=1               # 自动部署ESS方案"
     echo "  AUTO_DEPLOY=2               # 自动部署IP更新系统"
     echo "  AUTO_DEPLOY=3               # 自动完整部署"
+    echo "  AUTO_DEPLOY=4               # 自动测试模式部署"
     echo
     echo -e "${CYAN}推荐使用方式:${NC}"
     echo "  # 交互式部署 (推荐新手)"
@@ -429,15 +507,22 @@ show_help() {
     echo "  DOMAIN=your-domain.com AUTO_DEPLOY=3 bash <(curl -fsSL $REPO_URL/setup.sh)"
     echo
     echo -e "${CYAN}完整示例:${NC}"
-    echo "  # 设置域名和端口的完整部署"
+    echo "  # 生产环境完整部署"
     echo "  DOMAIN=matrix.example.com \\"
     echo "  HTTP_PORT=8080 \\"
     echo "  HTTPS_PORT=8443 \\"
     echo "  AUTO_DEPLOY=3 \\"
     echo "  bash <(curl -fsSL $REPO_URL/setup.sh)"
     echo
+    echo "  # 测试环境部署 (使用测试证书)"
+    echo "  DOMAIN=test.example.com \\"
+    echo "  TEST_MODE=true \\"
+    echo "  CERT_TYPE=self-signed \\"
+    echo "  AUTO_DEPLOY=4 \\"
+    echo "  bash <(curl -fsSL $REPO_URL/setup.sh)"
+    echo
     echo "  # 调试模式"
-    echo "  DEBUG=true DOMAIN=test.example.com AUTO_DEPLOY=3 \\"
+    echo "  DEBUG=true DOMAIN=test.example.com AUTO_DEPLOY=test \\"
     echo "  bash <(curl -fsSL $REPO_URL/setup.sh)"
     echo
     echo -e "${CYAN}重要提醒:${NC}"
@@ -493,8 +578,12 @@ main() {
             "3")
                 deploy_full
                 ;;
+            "4"|"test")
+                deploy_test
+                ;;
             *)
                 log "ERROR" "无效的AUTO_DEPLOY值: $AUTO_DEPLOY"
+                log "INFO" "支持的值: 1(ESS), 2(IP更新), 3(完整), 4/test(测试模式)"
                 exit 1
                 ;;
         esac
@@ -520,13 +609,17 @@ main() {
                 break
                 ;;
             "4")
-                check_config
+                deploy_test
+                break
                 ;;
             "5")
+                check_config
+                ;;
+            "6")
                 download_to_local
                 break
                 ;;
-            "6")
+            "7")
                 show_help
                 ;;
             "0")
@@ -534,7 +627,7 @@ main() {
                 exit 0
                 ;;
             *)
-                log "ERROR" "无效选择，请输入 1-6 或 0"
+                log "ERROR" "无效选择，请输入 1-7 或 0"
                 ;;
         esac
     done
