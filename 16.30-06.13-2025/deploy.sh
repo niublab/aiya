@@ -133,8 +133,89 @@ deploy_cert_manager() {
     k3s kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.18.0/cert-manager.yaml
     
     # 等待cert-manager启动
-    print_info "等待cert-manager启动..."
+    print_info "等待cert-manager完全就绪..."
+
+    # 1. 等待所有Pod就绪
+    print_info "等待cert-manager Pods就绪..."
     k3s kubectl wait --for=condition=ready pod -l app=cert-manager -n cert-manager --timeout=300s
+
+    # 2. 等待所有Deployment可用
+    print_info "等待cert-manager Deployments可用..."
+    k3s kubectl wait --for=condition=available deployment/cert-manager -n cert-manager --timeout=300s
+    k3s kubectl wait --for=condition=available deployment/cert-manager-webhook -n cert-manager --timeout=300s
+    k3s kubectl wait --for=condition=available deployment/cert-manager-cainjector -n cert-manager --timeout=300s
+
+    # 3. 等待webhook endpoints就绪
+    print_info "等待cert-manager-webhook endpoints就绪..."
+    local max_attempts=30
+    local attempt=1
+    while [[ $attempt -le $max_attempts ]]; do
+        local endpoints=$(k3s kubectl get endpoints cert-manager-webhook -n cert-manager -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || echo "")
+        if [[ -n "$endpoints" ]]; then
+            print_success "cert-manager-webhook endpoints就绪: $endpoints"
+            break
+        fi
+        print_info "等待webhook endpoints... ($attempt/$max_attempts)"
+        sleep 5
+        ((attempt++))
+    done
+
+    if [[ $attempt -gt $max_attempts ]]; then
+        print_warning "webhook endpoints等待超时，但继续尝试配置"
+    fi
+
+    # 4. 验证ValidatingAdmissionWebhook是否注册
+    print_info "验证ValidatingAdmissionWebhook注册状态..."
+    local webhook_attempts=20
+    local webhook_attempt=1
+    while [[ $webhook_attempt -le $webhook_attempts ]]; do
+        if k3s kubectl get validatingadmissionwebhooks.admissionregistration.k8s.io cert-manager-webhook &>/dev/null; then
+            print_success "ValidatingAdmissionWebhook已注册"
+            break
+        fi
+        print_info "等待ValidatingAdmissionWebhook注册... ($webhook_attempt/$webhook_attempts)"
+        sleep 3
+        ((webhook_attempt++))
+    done
+
+    if [[ $webhook_attempt -gt $webhook_attempts ]]; then
+        print_warning "ValidatingAdmissionWebhook注册等待超时"
+    fi
+
+    # 5. 最终验证：测试webhook连通性
+    print_info "测试cert-manager webhook连通性..."
+    local test_attempts=10
+    local test_attempt=1
+    while [[ $test_attempt -le $test_attempts ]]; do
+        # 尝试创建一个测试的ClusterIssuer来验证webhook
+        if k3s kubectl apply --dry-run=server -f - <<EOF &>/dev/null
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: test-webhook-connectivity
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: test@example.com
+    privateKeySecretRef:
+      name: test-key
+    solvers:
+    - http01:
+        ingress:
+          class: traefik
+EOF
+        then
+            print_success "cert-manager webhook连通性测试通过"
+            break
+        fi
+        print_info "测试webhook连通性... ($test_attempt/$test_attempts)"
+        sleep 5
+        ((test_attempt++))
+    done
+
+    if [[ $test_attempt -gt $test_attempts ]]; then
+        print_warning "webhook连通性测试失败，但继续配置（将使用重试机制）"
+    fi
     
     # 创建Let's Encrypt Issuer
     print_info "配置Let's Encrypt证书颁发者..."
@@ -148,7 +229,16 @@ deploy_cert_manager() {
             --dry-run=client -o yaml | k3s kubectl apply -f -
     fi
 
-    cat << EOF | k3s kubectl apply -f -
+    # 使用智能重试机制创建ClusterIssuer
+    print_info "创建ClusterIssuer (使用智能重试)..."
+    local issuer_attempts=10
+    local issuer_attempt=1
+    local issuer_created=false
+
+    while [[ $issuer_attempt -le $issuer_attempts ]]; do
+        print_info "尝试创建ClusterIssuer... ($issuer_attempt/$issuer_attempts)"
+
+        if cat << EOF | k3s kubectl apply -f - 2>/dev/null
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -166,6 +256,34 @@ spec:
             name: cloudflare-api-token-secret
             key: api-token
 EOF
+        then
+            print_success "ClusterIssuer创建成功"
+            issuer_created=true
+            break
+        else
+            print_warning "ClusterIssuer创建失败，等待webhook就绪..."
+
+            # 检查具体的错误原因
+            local webhook_status=$(k3s kubectl get endpoints cert-manager-webhook -n cert-manager -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || echo "no-endpoints")
+            if [[ "$webhook_status" == "no-endpoints" ]]; then
+                print_info "webhook endpoints尚未就绪，继续等待..."
+            else
+                print_info "webhook endpoints已就绪，但可能需要更多时间初始化"
+            fi
+
+            sleep 10
+            ((issuer_attempt++))
+        fi
+    done
+
+    if [[ "$issuer_created" != "true" ]]; then
+        print_error "ClusterIssuer创建失败，请检查cert-manager状态"
+        print_info "手动检查命令:"
+        print_info "  kubectl get pods -n cert-manager"
+        print_info "  kubectl get endpoints cert-manager-webhook -n cert-manager"
+        print_info "  kubectl get validatingadmissionwebhooks cert-manager-webhook"
+        return 1
+    fi
     
     print_success "cert-manager配置完成"
 }
