@@ -561,10 +561,20 @@ test_network_connectivity() {
     local test_ip=$(dig +short ip.$MAIN_DOMAIN @8.8.8.8 2>/dev/null || dig +short ip.$MAIN_DOMAIN @1.1.1.1 2>/dev/null)
     if [[ -n "$test_ip" && "$test_ip" != "unknown" && "$test_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         print_success "DDNS解析成功: $test_ip"
+        print_info "当前服务器公网IP: $test_ip"
     else
         print_warning "DDNS解析失败，需要检查域名配置"
         print_info "请确认 ip.$MAIN_DOMAIN 的A记录已正确配置"
         print_info "测试命令: dig +short ip.$MAIN_DOMAIN @8.8.8.8"
+
+        # 尝试其他方式获取公网IP作为参考
+        print_info "尝试其他方式获取公网IP作为参考..."
+        local fallback_ip=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s --connect-timeout 5 ipinfo.io/ip 2>/dev/null || echo "无法获取")
+        if [[ "$fallback_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            print_info "参考公网IP: $fallback_ip (请确保DNS指向此IP)"
+        else
+            print_warning "无法获取公网IP，请手动检查网络配置"
+        fi
     fi
 
     # 检测域名解析
@@ -886,16 +896,33 @@ main() {
                 echo "  HTTPS端口: $HTTPS_PORT"
                 echo "  联邦端口: $FEDERATION_PORT"
                 echo "  IP获取方式: $IP_METHOD"
+
+                # 显示当前公网IP
+                local current_ip=$(dig +short ip.$MAIN_DOMAIN @8.8.8.8 2>/dev/null || dig +short ip.$MAIN_DOMAIN @1.1.1.1 2>/dev/null)
+                if [[ -n "$current_ip" && "$current_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    echo "  当前公网IP: $current_ip"
+                else
+                    echo "  当前公网IP: 未获取到 (请检查DNS配置)"
+                fi
                 echo
 
                 if confirm "确认开始部署" "y"; then
-                    # 调用部署脚本 (如果存在)
-                    if [[ -f "$SCRIPT_DIR/deploy.sh" ]]; then
-                        "$SCRIPT_DIR/deploy.sh"
+                    # 调用部署脚本
+                    local deploy_script="$SCRIPT_DIR/deploy.sh"
+                    print_info "检查部署脚本: $deploy_script"
+
+                    if [[ -f "$deploy_script" ]]; then
+                        print_success "找到部署脚本，开始自动部署..."
+                        chmod +x "$deploy_script"
+                        "$deploy_script"
                     else
-                        print_info "配置文件已生成，请手动部署或创建deploy.sh脚本"
+                        print_warning "未找到部署脚本: $deploy_script"
+                        print_info "配置文件已生成，请手动部署:"
                         print_info "ESS配置文件: $INSTALL_DIR/ess-values.yaml"
                         print_info "环境配置文件: $CONFIG_FILE"
+                        print_info ""
+                        print_info "手动部署命令:"
+                        print_info "cd $SCRIPT_DIR && ./deploy.sh"
                     fi
                 fi
                 read -p "按回车键继续..."
