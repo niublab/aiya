@@ -383,9 +383,8 @@ NODEPORT_HTTP="30080"          # HTTP NodePort
 NODEPORT_HTTPS="30443"         # HTTPS NodePort
 NODEPORT_FEDERATION="30448"    # 联邦 NodePort
 
-# WebRTC端口配置 (视频会议)
-WEBRTC_TCP_PORT="30881"        # WebRTC TCP端口
-WEBRTC_UDP_PORT="30882"        # WebRTC UDP端口
+# WebRTC端口配置 (标准配置 - 推荐)
+WEBRTC_TCP_PORT="30881"        # WebRTC TCP端口 (ICE/TCP fallback)
 
 # ==================== 管理员配置 ====================
 ADMIN_USERNAME="$ADMIN_USERNAME"
@@ -455,8 +454,8 @@ show_config_details() {
     echo "  HTTP端口: $HTTP_PORT"
     echo "  HTTPS端口: $HTTPS_PORT"
     echo "  联邦端口: $FEDERATION_PORT"
-    echo "  WebRTC TCP: $WEBRTC_TCP_PORT"
-    echo "  WebRTC UDP: $WEBRTC_UDP_PORT"
+    echo "  WebRTC TCP: $WEBRTC_TCP_PORT (ICE/TCP fallback)"
+    echo "  WebRTC UDP: 30152-30352 (端口范围)"
     echo
 
     echo -e "${WHITE}网络配置:${NC}"
@@ -611,19 +610,16 @@ matrixRTC:
     enabled: true
     type: "livekit"
 
-    # LiveKit配置 (遵循需求文档UDP端口范围)
+    # LiveKit配置 (标准配置 - 推荐)
     config:
       # WebRTC配置
       rtc:
-        # UDP端口范围 (需求文档指定: 30152-30352)
+        # UDP端口范围 (需求文档指定: 30152-30352) - 必需
         port_range_start: 30152
         port_range_end: 30352
 
-        # TCP端口 (ICE/TCP fallback)
+        # TCP端口 (ICE/TCP fallback) - 推荐，应对严格防火墙
         tcp_port: $WEBRTC_TCP_PORT
-
-        # UDP单端口模式 (可选，与port_range互斥)
-        # udp_port: $WEBRTC_UDP_PORT
 
       # API端口配置
       port: 7880
@@ -742,32 +738,30 @@ service:
 networkPolicy:
   enabled: true
 
-  # 允许UDP端口范围入站流量
+  # 允许WebRTC端口入站流量 (标准配置)
   ingress:
     - from: []
       ports:
+        # UDP端口范围 (主要WebRTC端口) - 必需
         - protocol: UDP
           port: 30152
           endPort: 30352
+        # TCP端口 (ICE/TCP fallback) - 推荐
         - protocol: TCP
           port: $WEBRTC_TCP_PORT
-        - protocol: UDP
-          port: $WEBRTC_UDP_PORT
 
 # ==================== 主机网络配置 ====================
-# LiveKit需要主机网络来暴露UDP端口范围
+# LiveKit需要主机网络来暴露UDP端口范围 (标准配置)
 hostNetwork:
   enabled: true
 
-  # UDP端口范围配置
+  # UDP端口范围配置 (主要WebRTC端口) - 必需
   udpPortRange:
     start: 30152
     end: 30352
 
-  # 固定端口配置
-  fixedPorts:
-    tcp: $WEBRTC_TCP_PORT
-    udp: $WEBRTC_UDP_PORT
+  # TCP端口配置 (ICE/TCP fallback) - 推荐
+  tcpPort: $WEBRTC_TCP_PORT
 EOF
 
     print_success "ESS配置文件已生成: $values_file"

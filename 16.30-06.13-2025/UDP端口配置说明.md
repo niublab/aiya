@@ -6,12 +6,9 @@
 根据需求文档要求，Matrix ESS Community必须使用以下UDP端口配置：
 
 ```bash
-# 主要WebRTC媒体端口范围 (必需)
-30152-30352/udp    # 共201个UDP端口
-
-# 固定WebRTC端口 (可选)
-30881/tcp          # ICE/TCP fallback
-30882/udp          # 固定UDP端口
+# 标准配置 (推荐) - 适合大多数环境
+30152-30352/udp    # 主要WebRTC端口范围 (必需)
+30881/tcp          # ICE/TCP fallback (推荐，应对严格防火墙)
 ```
 
 ## 🔧 脚本配置实现
@@ -56,21 +53,17 @@ hostNetwork:
 # UDP端口范围 (用于WebRTC)
 UDP_RANGE="30152-30352"
 
-# 固定WebRTC端口
-WEBRTC_TCP_PORT="30881"
-WEBRTC_UDP_PORT="30882"
+# WebRTC端口配置 (标准配置)
+WEBRTC_TCP_PORT="30881"  # ICE/TCP fallback端口
 ```
 
 ## 🚪 路由器防火墙配置
 
 ### 必需放行的UDP端口
 ```bash
-# 主要WebRTC端口范围 (必需)
-30152-30352/udp → 服务器IP:30152-30352
-
-# 固定端口 (可选，用于特定场景)
-30881/tcp → 服务器IP:30881
-30882/udp → 服务器IP:30882
+# 标准配置 (推荐)
+30152-30352/udp → 服务器IP:30152-30352  # 主要WebRTC端口范围 (必需)
+30881/tcp → 服务器IP:30881              # ICE/TCP fallback (推荐)
 ```
 
 ### 路由器配置示例
