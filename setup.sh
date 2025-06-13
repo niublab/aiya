@@ -1413,38 +1413,30 @@ generate_ess_values() {
     print_info "生成ESS values文件: $values_file"
     print_info "基于官方schema生成最小化配置..."
 
-    # 基于官方quick-setup-hostnames.yaml的配置，包含端口号修复
+    # 基于官方schema生成最小化配置，移除不支持的属性
     cat > "$values_file" << EOF
 # Matrix ESS Community 配置文件
 # 生成时间: $(date)
 # 脚本版本: $SCRIPT_VERSION
 # ESS版本: $ESS_VERSION
-# 基于官方 quick-setup-hostnames.yaml 模板，包含端口号修复
+# 基于官方schema的最小化配置
 
 # 服务器名称 (必需)
 serverName: "$SERVER_NAME"
 
-# Element Web配置 - 修复端口号问题
+# Element Web配置 - 仅包含支持的属性
 elementWeb:
   ingress:
     host: "$WEB_HOST"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
-  config:
-    default_server_config:
-      m.homeserver:
-        base_url: "https://$SYNAPSE_HOST:$HTTPS_PORT"
-        server_name: "$SERVER_NAME"
 
-# Matrix Authentication Service配置 - 修复端口号问题
+# Matrix Authentication Service配置 - 仅包含支持的属性
 matrixAuthenticationService:
   ingress:
     host: "$AUTH_HOST"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
-  config:
-    http:
-      public_base: "https://$AUTH_HOST:$HTTPS_PORT"
 
 # Matrix RTC配置
 matrixRTC:
@@ -1460,19 +1452,16 @@ synapse:
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
 
-# Well-known配置 - 修复端口号问题
-wellKnown:
-  client:
-    m.homeserver:
-      base_url: "https://$SYNAPSE_HOST:$HTTPS_PORT"
-    org.matrix.msc2965.authentication:
-      issuer: "https://$AUTH_HOST:$HTTPS_PORT/"
-      account: "https://$AUTH_HOST:$HTTPS_PORT/account"
-    org.matrix.msc4143.rtc_foci:
-      - type: "livekit"
-        livekit_service_url: "https://$RTC_HOST:$HTTPS_PORT"
-  server:
-    m.server: "$SYNAPSE_HOST:$HTTPS_PORT"
+# Well-known委托配置 - 使用正确的属性名和端口号
+wellKnownDelegation:
+  enabled: true
+  ingress:
+    host: "$SERVER_NAME"
+    annotations:
+      cert-manager.io/cluster-issuer: "$issuer_name"
+  additional:
+    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST:$HTTPS_PORT"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST:$HTTPS_PORT/","account":"https://$AUTH_HOST:$HTTPS_PORT/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST:$HTTPS_PORT"}]}'
+    server: '{"m.server":"$SYNAPSE_HOST:$HTTPS_PORT"}'
 EOF
 
     # 保存管理员密码到单独文件
