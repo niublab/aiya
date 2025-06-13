@@ -155,13 +155,51 @@ show_main_menu() {
 # ==================== 动态配置初始化 ====================
 
 init_dynamic_config() {
-    # 动态确定脚本目录
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # 检测安装方式
+    if [[ "${BASH_SOURCE[0]}" == "/dev/fd/"* ]] || [[ "${BASH_SOURCE[0]}" == "/proc/self/fd/"* ]]; then
+        # curl方式安装
+        INSTALL_METHOD="curl"
+        SCRIPT_DIR="/opt/matrix-ess-setup"
+        print_info "检测到curl安装方式"
+        print_info "将在 $SCRIPT_DIR 目录下载和运行脚本"
+
+        # 创建工作目录
+        mkdir -p "$SCRIPT_DIR"
+        cd "$SCRIPT_DIR"
+
+        # 下载所有必要的脚本文件
+        download_scripts
+    else
+        # 本地文件安装
+        INSTALL_METHOD="local"
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        print_info "检测到本地文件安装方式"
+        print_info "脚本目录: $SCRIPT_DIR"
+    fi
 
     # 动态确定配置文件路径
     CONFIG_FILE="$SCRIPT_DIR/matrix-config.env"
+}
 
-    print_info "脚本目录: $SCRIPT_DIR"
+# ==================== 脚本下载 ====================
+
+download_scripts() {
+    print_step "下载必要的脚本文件"
+
+    local base_url="https://raw.githubusercontent.com/niublab/aiya/main/16.30-06.13-2025"
+    local scripts=("deploy.sh" "cleanup.sh" "fix-config.sh")
+
+    for script in "${scripts[@]}"; do
+        print_info "下载 $script..."
+        if curl -fsSL "$base_url/$script" -o "$script"; then
+            chmod +x "$script"
+            print_success "下载完成: $script"
+        else
+            print_warning "下载失败: $script (将在需要时重试)"
+        fi
+    done
+
+    print_success "脚本下载完成"
 }
 
 # ==================== 配置收集 ====================
@@ -850,6 +888,12 @@ EOF
 # ==================== 主程序 ====================
 
 main() {
+    # 显示安装信息
+    print_header "Matrix ESS Community 部署脚本"
+    print_info "版本: $SCRIPT_VERSION"
+    print_info "ESS版本: $ESS_VERSION"
+    echo
+
     # 初始化动态配置
     init_dynamic_config
 
@@ -909,31 +953,33 @@ main() {
                 if confirm "确认开始部署" "y"; then
                     # 调用部署脚本
                     local deploy_script="$SCRIPT_DIR/deploy.sh"
-                    print_info "检查部署脚本: $deploy_script"
-                    print_info "当前脚本目录: $SCRIPT_DIR"
-                    print_info "当前工作目录: $(pwd)"
 
-                    if [[ -f "$deploy_script" ]]; then
-                        print_success "找到部署脚本，开始自动部署..."
-                        chmod +x "$deploy_script"
-
-                        # 切换到脚本目录执行，确保路径正确
-                        print_info "切换到脚本目录执行部署..."
-                        cd "$SCRIPT_DIR"
-                        ./deploy.sh
-                    else
-                        print_warning "未找到部署脚本: $deploy_script"
-                        print_info "配置文件已生成，请手动部署:"
-                        print_info "ESS配置文件: $INSTALL_DIR/ess-values.yaml"
-                        print_info "环境配置文件: $CONFIG_FILE"
-                        print_info ""
-                        print_info "手动部署命令:"
-                        print_info "cd $SCRIPT_DIR && ./deploy.sh"
-
-                        # 显示目录内容帮助调试
-                        print_info "脚本目录内容:"
-                        ls -la "$SCRIPT_DIR"/ | grep -E "\.(sh|yaml|env)$" || echo "  未找到相关文件"
+                    # 确保部署脚本存在
+                    if [[ ! -f "$deploy_script" ]]; then
+                        if [[ "$INSTALL_METHOD" == "curl" ]]; then
+                            print_info "部署脚本不存在，重新下载..."
+                            local base_url="https://raw.githubusercontent.com/niublab/aiya/main/16.30-06.13-2025"
+                            if curl -fsSL "$base_url/deploy.sh" -o "$deploy_script"; then
+                                chmod +x "$deploy_script"
+                                print_success "部署脚本下载完成"
+                            else
+                                print_error "无法下载部署脚本"
+                                print_info "请检查网络连接或手动下载"
+                                return 1
+                            fi
+                        else
+                            print_error "未找到部署脚本: $deploy_script"
+                            return 1
+                        fi
                     fi
+
+                    print_success "开始自动部署..."
+                    print_info "部署脚本: $deploy_script"
+                    print_info "工作目录: $SCRIPT_DIR"
+
+                    # 切换到脚本目录执行，确保路径正确
+                    cd "$SCRIPT_DIR"
+                    ./deploy.sh
                 fi
                 read -p "按回车键继续..."
                 ;;

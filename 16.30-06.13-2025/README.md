@@ -1,187 +1,197 @@
-# Matrix ESS Community 自动部署脚本 v5.0.0
+# Matrix ESS Community 一键部署脚本
 
-## 🎯 重新设计版本
+## 🚀 **快速安装**
 
-基于所有已知信息重新设计的Matrix ESS Community自动部署脚本，专注于：
-- **小白友好**: 简化交互，减少选择
-- **逻辑严谨**: 移除无用功能，优化流程  
-- **完全动态**: 不依赖硬编码路径、子域名、端口
-- **模块化设计**: 分离主脚本和子脚本
-- **最小化修改**: 对上游项目保持最小修改
-- **官方规范**: 严格遵循ESS官方最新规范25.6.1
+### **方式1: curl一键安装 (推荐)**
 
-## 📁 脚本架构
-
-```
-16.30-06.13-2025/
-├── setup.sh           # 主脚本 - 配置收集和菜单
-├── deploy.sh          # 部署脚本 - 专注核心部署
-├── cleanup.sh         # 清理脚本 - 快速清理
-└── README.md          # 说明文档
-```
-
-## ✨ 主要特性
-
-### 🔧 **完全动态配置**
-- ❌ 无硬编码路径、子域名、端口
-- ✅ 运行时收集所有配置信息
-- ✅ 支持完全自定义的域名和端口
-- ✅ 动态生成配置文件
-
-### 📋 **配置文件完整性**
-配置文件包含所有必要信息：
-- **路径配置**: 脚本目录、安装目录、配置文件路径
-- **域名配置**: 服务器域名、所有子域名
-- **端口配置**: HTTP、HTTPS、联邦、NodePort、WebRTC端口
-- **管理员配置**: 用户名、密码
-- **证书配置**: 邮箱、环境设置
-- **版本信息**: ESS、K3s、Helm版本
-- **网络配置**: 公网IP、UDP范围
-- **部署配置**: 命名空间、超时设置
-
-### 🎨 **小白友好设计**
-- **简化菜单**: 只有4个主要选项
-- **智能默认值**: 提供合理的默认配置
-- **自动生成**: 基于主域名自动生成子域名
-- **一键部署**: 配置完成后一键部署
-- **清晰反馈**: 详细的进度和状态信息
-
-### 📊 **基于官方最新规范**
-ESS配置文件严格遵循官方规范：
-- **serverName**: Matrix服务器名称
-- **ingress**: 全局Ingress配置，支持自定义端口
-- **elementWeb**: Element Web客户端配置
-- **matrixAuthenticationService**: MAS认证服务
-- **matrixRTC**: WebRTC视频会议服务
-- **synapse**: Synapse主服务器
-- **postgresql**: 内置数据库
-- **haproxy**: 负载均衡器
-- **wellKnownDelegation**: 联邦发现配置
-
-## 🚀 使用方法
-
-### 快速开始
 ```bash
-# 1. 下载脚本
-wget https://github.com/niublab/aiya/raw/main/16.30-06.13-2025/setup.sh
+# 一键安装并运行
+bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/16.30-06.13-2025/setup.sh)
+```
+
+### **方式2: 下载后安装**
+
+```bash
+# 下载脚本
+curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/16.30-06.13-2025/setup.sh -o setup.sh
+
+# 运行脚本
 chmod +x setup.sh
-
-# 2. 运行主脚本
 sudo ./setup.sh
-
-# 3. 选择"1) 一键部署"
-# 4. 按提示输入配置信息
-# 5. 确认部署
 ```
 
-### 配置示例
-```
+## 📋 **系统要求**
+
+- **操作系统**: Ubuntu 20.04+ / Debian 11+ / CentOS 8+
+- **内存**: 最少4GB，推荐8GB+
+- **存储**: 最少20GB可用空间
+- **网络**: 公网IP和域名
+- **权限**: root权限
+
+## 🎯 **功能特性**
+
+### **✅ 完整的Matrix ESS部署**
+- Matrix Synapse服务器
+- Element Web客户端
+- Matrix Authentication Service (MAS)
+- Matrix RTC (视频会议)
+- 自动SSL证书管理
+
+### **✅ 智能配置**
+- 自动域名配置和验证
+- 智能端口配置
+- 公网IP自动检测
+- DNS配置验证
+
+### **✅ 安全可靠**
+- Let's Encrypt自动证书
+- Cloudflare DNS验证
+- 安全的端口配置
+- 完整的权限管理
+
+## 🔧 **配置说明**
+
+### **域名配置**
+脚本支持智能域名配置：
+
+```bash
 主域名: example.com
 
 自动生成的子域名:
-  Element Web: app.example.com
-  认证服务 (MAS): mas.example.com
-  RTC服务: rtc.example.com
-  Matrix服务器: matrix.example.com
-  Synapse: matrix.example.com
-
-其他配置:
-安装目录: [默认: /opt/matrix]
-HTTP端口: [默认: 8080]
-HTTPS端口: [默认: 8443]
-联邦端口: [默认: 8448]
-管理员用户名: [默认: admin]
-管理员密码: [输入密码]
-证书邮箱: admin@example.com
+- Element Web: chat.example.com
+- 认证服务: account.example.com  
+- RTC服务: mrtc.example.com
+- Synapse: matrix.example.com
+- Matrix服务器: example.com (用户ID: @username:example.com)
 ```
 
-## 📋 菜单选项
+### **端口配置**
+默认端口配置（可自定义）：
 
-### 1️⃣ **一键部署 Matrix ESS**
-- 收集配置信息
-- 生成ESS配置文件
-- 显示配置摘要
-- 执行自动部署
+```bash
+- HTTP端口: 8080
+- HTTPS端口: 8443
+- 联邦端口: 8448
+- WebRTC TCP: 30881
+- WebRTC UDP: 30152-30352
+```
 
-### 2️⃣ **管理现有部署**
-- 查看当前配置
-- 管理服务状态
-- 更新配置 (开发中)
+### **DNS要求**
+需要配置以下DNS记录：
 
-### 3️⃣ **完全清理**
-- 清理ESS部署
-- 清理cert-manager
-- 清理K3s集群
-- 清理文件和配置
+```bash
+# A记录 (指向服务器IP)
+chat.example.com     → 服务器IP
+account.example.com  → 服务器IP
+mrtc.example.com     → 服务器IP
+matrix.example.com   → 服务器IP
 
-### 4️⃣ **系统信息**
-- 脚本版本信息
-- ESS版本信息
-- 系统资源状态
-- 当前配置信息
+# 特殊记录 (用于IP检测)
+ip.example.com       → 服务器IP
+```
 
-## 📄 生成的文件
+## 📖 **使用指南**
 
-### 配置文件
-- **`matrix-config.env`**: 环境配置文件，包含所有自定义配置
-- **`ess-values.yaml`**: ESS Helm配置文件，基于官方最新规范
+### **1. 运行安装脚本**
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/16.30-06.13-2025/setup.sh)
+```
 
-### 部署信息
-- **`deployment-summary.txt`**: 部署摘要，包含访问地址和配置信息
+### **2. 选择部署选项**
+```bash
+Matrix ESS Community 部署脚本
 
-## 🔧 技术规范
+请选择操作:
+  1) 一键部署 - 完整部署Matrix ESS
+  2) 管理现有部署 - 管理已部署的服务
+  3) 完全清理 - 清理所有数据和配置
+  4) 系统信息 - 显示系统和服务状态
 
-### 系统要求
-- **操作系统**: Debian 11+ / Ubuntu 20.04+
-- **内存**: 最少4GB，推荐8GB+
-- **存储**: 最少20GB可用空间
-- **权限**: root或sudo权限
+请选择 (1-4): 1
+```
 
-### 版本信息
-- **脚本版本**: 5.0.0
-- **ESS版本**: 25.6.1 (官方最新稳定版)
-- **K3s版本**: v1.32.5+k3s1
-- **Helm版本**: v3.18.2
-- **cert-manager版本**: v1.18.0
+### **3. 配置信息**
+按提示输入：
+- 安装目录 (默认: /opt/matrix)
+- 主域名 (如: example.com)
+- 管理员用户名和密码
+- Let's Encrypt证书邮箱
+- Cloudflare API Token
 
-### 端口配置
-- **HTTP**: 8080 (可自定义)
-- **HTTPS**: 8443 (可自定义)
-- **联邦**: 8448 (可自定义)
-- **NodePort HTTP**: 30080
-- **NodePort HTTPS**: 30443
-- **NodePort 联邦**: 30448
-- **WebRTC TCP**: 30881
-- **WebRTC UDP**: 30882
+### **4. 自动部署**
+脚本将自动：
+- 安装K3s Kubernetes
+- 安装Helm包管理器
+- 部署cert-manager
+- 部署Matrix ESS
+- 配置SSL证书
+- 创建管理员用户
 
-## 🎯 设计改进
+## 🛠️ **管理命令**
 
-### 相比之前版本的改进
-1. **简化交互**: 从复杂的多级菜单简化为4个主要选项
-2. **移除冗余**: 去掉了无用的检测功能和过多的确认步骤
-3. **动态配置**: 完全消除硬编码，支持任意自定义
-4. **模块化**: 分离主脚本和功能脚本，职责清晰
-5. **官方规范**: 严格遵循ESS最新官方规范
-6. **逻辑严谨**: 优化部署流程，减少出错可能
+### **查看服务状态**
+```bash
+# 查看所有Pod状态
+kubectl get pods -A
 
-### 遵循的原则
-- ✅ **基于事实**: 严格基于ESS官方文档
-- ✅ **需求文档**: 遵循需求文档要求
-- ✅ **小白友好**: 操作简单，提示清晰
-- ✅ **最小化修改**: 对上游项目保持最小修改
-- ✅ **完全动态**: 无硬编码依赖
+# 查看ESS服务状态
+kubectl get pods -n ess
 
-## ⚠️ 重要说明
+# 查看服务日志
+kubectl logs -n ess deployment/synapse
+```
 
-1. **许可证**: 仅限非商业用途 (AGPL-3.0)
-2. **官方规范**: 基于ESS Community 25.6.1官方最新规范
-3. **测试环境**: 建议先在测试环境验证
-4. **DNS配置**: 部署后需要配置域名DNS解析
-5. **防火墙**: 确保开放相应端口
+### **管理用户**
+```bash
+# 创建新用户
+kubectl exec -n ess deployment/synapse -- register_new_matrix_user \
+  -u username -p password -a -c /data/homeserver.yaml \
+  http://localhost:8008
+```
+
+## 🔍 **故障排除**
+
+### **常见问题**
+
+#### **1. DNS解析失败**
+```bash
+# 检查DNS配置
+dig +short chat.example.com
+dig +short ip.example.com
+
+# 确保所有域名都指向服务器IP
+```
+
+#### **2. 证书申请失败**
+```bash
+# 检查cert-manager状态
+kubectl get certificaterequests -A
+kubectl describe certificate -n ess
+
+# 检查Cloudflare API Token权限
+```
+
+#### **3. 服务无法访问**
+```bash
+# 检查端口开放
+netstat -tlnp | grep -E "(8080|8443|8448)"
+
+# 检查防火墙设置
+ufw status
+```
+
+## 📞 **支持**
+
+- **GitHub**: https://github.com/niublab/aiya
+- **文档**: 查看项目README和Wiki
+- **问题反馈**: 提交GitHub Issues
+
+## 📄 **许可证**
+
+本项目基于MIT许可证开源。
 
 ---
 
-**版本**: 5.0.0  
-**发布日期**: 2025-06-13 16:30  
-**基于**: ESS Community 25.6.1 官方规范  
-**设计理念**: 小白友好，逻辑严谨，完全动态
+**Matrix ESS Community 部署脚本 v5.0.0**  
+**支持ESS版本: 25.6.1**  
+**更新时间: 2025-06-13**
