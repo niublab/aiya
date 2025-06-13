@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Matrix ESS Community v4.0.0 部署脚本</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+            color: #333;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .version-badge {
+            background: rgba(255,255,255,0.2);
+            padding: 5px 15px;
+            border-radius: 20px;
+            display: inline-block;
+            margin-top: 10px;
+        }
+        .file-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+        .file-card {
+            border: 1px solid #e1e5e9;
+            border-radius: 8px;
+            padding: 20px;
+            background: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
+        }
+        .file-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        .file-icon {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        .file-name {
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        .file-desc {
+            color: #666;
+            font-size: 0.9em;
+        }
+        .download-btn {
+            background: #3498db;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            text-decoration: none;
+            display: inline-block;
+            margin-top: 10px;
+            transition: background 0.2s;
+        }
+        .download-btn:hover {
+            background: #2980b9;
+        }
+        .features {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 30px 0;
+        }
+        .feature-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .feature-item {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+        }
+        .feature-icon {
+            margin-right: 10px;
+            font-size: 1.2em;
+        }
+        .warning {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚀 Matrix ESS Community 自动部署脚本</h1>
+        <div class="version-badge">v4.0.0 - 基于ESS官方最新规范25.6.1</div>
+        <p>创建时间: 2025年6月13日 16:00</p>
+    </div>
+
+    <div class="features">
+        <h2>✨ 主要特性</h2>
+        <div class="feature-list">
+            <div class="feature-item">
+                <span class="feature-icon">🎯</span>
+                <span>基于ESS官方最新规范</span>
+            </div>
+            <div class="feature-item">
+                <span class="feature-icon">🚀</span>
+                <span>分阶段部署功能</span>
+            </div>
+            <div class="feature-item">
+                <span class="feature-icon">🎨</span>
+                <span>小白友好菜单设计</span>
+            </div>
+            <div class="feature-item">
+                <span class="feature-icon">🔒</span>
+                <span>官方OCI registry部署</span>
+            </div>
+            <div class="feature-item">
+                <span class="feature-icon">🛡️</span>
+                <span>严格版本控制</span>
+            </div>
+            <div class="feature-item">
+                <span class="feature-icon">📋</span>
+                <span>完整测试验证工具</span>
+            </div>
+        </div>
+    </div>
+
+    <h2>📁 文件下载</h2>
+    <div class="file-grid">
+        <div class="file-card">
+            <div class="file-icon">🚀</div>
+            <div class="file-name">setup.sh</div>
+            <div class="file-desc">主部署脚本，包含分阶段部署功能，基于ESS官方最新规范重写</div>
+            <a href="setup.sh" class="download-btn" download>下载脚本</a>
+        </div>
+
+        <div class="file-card">
+            <div class="file-icon">🔧</div>
+            <div class="file-name">test_setup.sh</div>
+            <div class="file-desc">脚本功能测试工具，验证语法和函数定义</div>
+            <a href="test_setup.sh" class="download-btn" download>下载测试工具</a>
+        </div>
+
+        <div class="file-card">
+            <div class="file-icon">✅</div>
+            <div class="file-name">verify_deployment.sh</div>
+            <div class="file-desc">部署验证工具，分阶段检查部署状态</div>
+            <a href="verify_deployment.sh" class="download-btn" download>下载验证工具</a>
+        </div>
+
+        <div class="file-card">
+            <div class="file-icon">📚</div>
+            <div class="file-name">README_v4.0.0.md</div>
+            <div class="file-desc">详细使用说明，包含分阶段部署流程和故障排除</div>
+            <a href="README_v4.0.0.md" class="download-btn" download>查看说明</a>
+        </div>
+
+        <div class="file-card">
+            <div class="file-icon">📝</div>
+            <div class="file-name">CHANGELOG_v4.0.0.md</div>
+            <div class="file-desc">详细更新日志，记录所有改进和新功能</div>
+            <a href="CHANGELOG_v4.0.0.md" class="download-btn" download>查看更新</a>
+        </div>
+
+        <div class="file-card">
+            <div class="file-icon">🗄️</div>
+            <div class="file-name">setup.sh.backup.*</div>
+            <div class="file-desc">原脚本备份文件，保留时间戳便于版本追溯</div>
+            <a href="setup.sh.backup.20250613_051922" class="download-btn" download>下载备份</a>
+        </div>
+    </div>
+
+    <div class="warning">
+        <strong>⚠️ 重要说明:</strong>
+        <ul>
+            <li>本脚本基于ESS Community 25.6.1官方最新规范编写</li>
+            <li>严格遵循"基于事实，严禁推测"原则</li>
+            <li>仅限非商业用途使用 (AGPL-3.0许可证)</li>
+            <li>建议先在测试环境验证后再用于生产环境</li>
+        </ul>
+    </div>
+
+    <h2>🚀 快速开始</h2>
+    <pre style="background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto;">
+# 1. 下载主脚本
+wget https://your-domain/16.00-06.13-2025/setup.sh
+chmod +x setup.sh
+
+# 2. 运行部署
+sudo ./setup.sh
+
+# 3. 选择菜单项1: 分阶段部署 Matrix ESS (推荐)
+</pre>
+
+    <footer style="text-align: center; margin-top: 50px; padding: 20px; border-top: 1px solid #eee; color: #666;">
+        <p>Matrix ESS Community 自动部署脚本 v4.0.0</p>
+        <p>基于 Element Server Suite Community 25.6.1 官方规范</p>
+        <p>创建时间: 2025年6月13日 16:00</p>
+    </footer>
+</body>
+</html>
