@@ -1528,16 +1528,25 @@ deploy_ess() {
 
     # 智能等待所有Pod启动
     print_info "等待所有服务启动..."
+    print_info "提示：此过程可能需要5-15分钟，请保持SSH连接"
+    print_info "如果意外断开，可以运行 'k3s kubectl get pods -n ess' 查看状态"
+
     local retry_count=0
-    local max_retries=60  # 10分钟最大等待时间
+    local max_retries=90  # 15分钟最大等待时间
     local last_status=""
 
+    # 防止脚本意外退出的信号处理
+    trap 'print_warning "检测到中断信号，但继续等待..."; sleep 2' INT TERM
+
     while true; do
+        # 临时禁用set -e以防止kubectl命令失败导致脚本退出
+        set +e
         local running_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Running" 2>/dev/null | tr -d '\n' || echo "0")
         local total_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | wc -l 2>/dev/null | tr -d '\n' || echo "0")
         local completed_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Completed" 2>/dev/null | tr -d '\n' || echo "0")
         local pending_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Pending" 2>/dev/null | tr -d '\n' || echo "0")
         local failed_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c -E "(Error|CrashLoopBackOff|ImagePullBackOff)" 2>/dev/null | tr -d '\n' || echo "0")
+        set -e  # 重新启用set -e
 
         # 确保所有变量都是纯数字，如果不是则设为0
         [[ "$running_pods" =~ ^[0-9]+$ ]] || running_pods=0
@@ -1570,16 +1579,26 @@ deploy_ess() {
         # 检查是否有失败的Pod
         if [ "$failed_pods" -gt 0 ]; then
             print_warning "检测到失败的Pod，显示详细状态:"
+            set +e
             k3s kubectl get pods -n "$namespace" | grep -E "(Error|CrashLoopBackOff|ImagePullBackOff)" || true
+            set -e
         fi
 
         # 超时检查
         if [ $retry_count -ge $max_retries ]; then
-            print_warning "等待服务启动超时 (10分钟)，当前状态: $current_status"
+            print_warning "等待服务启动超时 (15分钟)，当前状态: $current_status"
             print_info "显示所有Pod状态:"
-            k3s kubectl get pods -n "$namespace"
+            set +e
+            k3s kubectl get pods -n "$namespace" || true
+            print_info "显示最近事件:"
+            k3s kubectl get events -n "$namespace" --sort-by='.lastTimestamp' | tail -10 || true
+            set -e
             if [ "$failed_pods" -gt 0 ]; then
                 print_warning "有Pod启动失败，但继续部署流程"
+            else
+                print_info "服务仍在启动中，您可以稍后运行以下命令检查状态:"
+                print_info "k3s kubectl get pods -n ess"
+                print_info "k3s kubectl get events -n ess --sort-by='.lastTimestamp'"
             fi
             break  # 不返回错误，继续部署
         fi
@@ -1609,7 +1628,9 @@ deploy_ess() {
         print_info "检查 $service 状态..."
 
         # 检查Pod是否存在
+        set +e
         local pod_count=$(k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name="$service" --no-headers 2>/dev/null | wc -l 2>/dev/null | tr -d '\n' || echo "0")
+        set -e
         [[ "$pod_count" =~ ^[0-9]+$ ]] || pod_count=0
         if [ "$pod_count" -eq 0 ]; then
             print_warning "$service Pod不存在，跳过"
@@ -1617,6 +1638,7 @@ deploy_ess() {
         fi
 
         # 等待Pod就绪，但时间更短
+        set +e
         if k3s kubectl wait --for=condition=ready pod -l app.kubernetes.io/name="$service" -n "$namespace" --timeout=120s 2>/dev/null; then
             print_success "$service 已就绪"
         else
@@ -1624,6 +1646,7 @@ deploy_ess() {
             # 显示Pod状态用于调试
             k3s kubectl get pods -n "$namespace" -l app.kubernetes.io/name="$service" 2>/dev/null || true
         fi
+        set -e
     done
 
     print_success "ESS部署完成"
