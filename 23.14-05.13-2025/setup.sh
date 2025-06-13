@@ -455,28 +455,10 @@ deploy_test() {
     export TEST_MODE="true"
     export CERT_TYPE="${CERT_TYPE:-letsencrypt-staging}"
 
-    # 询问证书类型
-    echo
-    log "INFO" "选择测试证书类型:"
-    echo "  1) Let's Encrypt Staging (推荐，需要域名解析)"
-    echo "  2) 自签名证书 (无需域名解析)"
-    echo
-    read -p "请选择 [1-2]: " cert_choice
-
-    case "$cert_choice" in
-        "1")
-            export CERT_TYPE="letsencrypt-staging"
-            log "INFO" "将使用Let's Encrypt Staging证书"
-            ;;
-        "2")
-            export CERT_TYPE="self-signed"
-            log "INFO" "将使用自签名证书"
-            ;;
-        *)
-            log "WARNING" "无效选择，使用默认的Staging证书"
-            export CERT_TYPE="letsencrypt-staging"
-            ;;
-    esac
+    # 设置测试证书类型
+    export CERT_TYPE="letsencrypt-staging"
+    log "INFO" "将使用Let's Encrypt Staging证书"
+    log "WARNING" "Staging证书不被浏览器信任，仅用于测试目的"
 
     # 设置执行权限
     chmod +x deploy-ess-nginx-proxy.sh
@@ -569,7 +551,7 @@ show_help() {
     echo "  DNS_PROVIDER=cloudflare     # DNS提供商"
     echo "  CLOUDFLARE_API_TOKEN=xxx    # Cloudflare API Token"
     echo "  TEST_MODE=true              # 启用测试模式"
-    echo "  CERT_TYPE=self-signed       # 证书类型"
+    echo "  CERT_TYPE=letsencrypt-staging # 证书类型"
     echo "  DEBUG=true                  # 启用调试模式"
     echo "  AUTO_DEPLOY=1               # 自动部署ESS方案"
     echo "  AUTO_DEPLOY=2               # 自动部署IP更新系统"
@@ -598,10 +580,10 @@ show_help() {
     echo "  AUTO_DEPLOY=3 \\"
     echo "  bash <(curl -fsSL $REPO_URL/setup.sh)"
     echo
-    echo "  # 测试环境部署 (使用测试证书)"
+    echo "  # 测试环境部署 (使用Let's Encrypt Staging证书)"
     echo "  DOMAIN=test.example.com \\"
     echo "  TEST_MODE=true \\"
-    echo "  CERT_TYPE=self-signed \\"
+    echo "  CERT_TYPE=letsencrypt-staging \\"
     echo "  AUTO_DEPLOY=4 \\"
     echo "  bash <(curl -fsSL $REPO_URL/setup.sh)"
     echo

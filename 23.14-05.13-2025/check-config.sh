@@ -209,11 +209,6 @@ check_certificate() {
             print_warning "证书类型: Let's Encrypt 测试证书"
             print_warning "浏览器会显示不安全警告"
             ;;
-        "self-signed")
-            print_warning "证书类型: 自签名证书"
-            print_warning "浏览器会显示不安全警告"
-            print_info "优点: 无需域名解析，适合内网测试"
-            ;;
         "custom")
             print_info "证书类型: 自定义证书"
             local custom_cert="${CUSTOM_CERT_PATH:-/etc/ssl/certs/$DOMAIN.crt}"
@@ -235,7 +230,7 @@ check_certificate() {
             ;;
         *)
             print_error "不支持的证书类型: $cert_type"
-            print_info "支持的类型: letsencrypt, letsencrypt-staging, self-signed, custom"
+            print_info "支持的类型: letsencrypt, letsencrypt-staging, custom"
             return 1
             ;;
     esac

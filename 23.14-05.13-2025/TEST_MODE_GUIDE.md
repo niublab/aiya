@@ -2,20 +2,20 @@
 
 ## 📋 测试模式概述
 
-测试模式专为开发、测试和演示环境设计，提供快速部署选项，无需复杂的DNS配置和证书申请。
+测试模式专为开发、测试和演示环境设计，使用Let's Encrypt Staging证书，提供快速部署选项。
 
 ## 🎯 测试模式特点
 
 ### ✅ **优势**
-- **快速部署**: 无需等待DNS传播和证书验证
-- **无域名要求**: 可使用自签名证书，无需真实域名
-- **开发友好**: 适合本地开发和内网测试
 - **无速率限制**: Let's Encrypt Staging环境无申请限制
-- **安全隔离**: 测试证书不会影响生产环境
+- **真实ACME流程**: 完整的证书申请流程测试
+- **快速部署**: 适合开发和测试环境
+- **安全隔离**: 测试证书不会影响生产环境配额
+- **DNS验证支持**: 支持DNS和HTTP验证方式
 
 ### ⚠️ **限制**
 - **浏览器警告**: 会显示"不安全"或"证书无效"警告
-- **手动信任**: 需要手动添加证书信任
+- **需要域名解析**: 必须有有效的域名解析
 - **仅限测试**: 不适合生产环境使用
 
 ## 🚀 快速开始
@@ -28,46 +28,56 @@ bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/23.14-05.1
 
 ### **方法2: 自动测试部署**
 ```bash
-# 使用Let's Encrypt Staging证书
-DOMAIN=test.example.com AUTO_DEPLOY=4 bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/23.14-05.13-2025/setup.sh)
+# 使用Let's Encrypt Staging证书 (DNS验证)
+DOMAIN=test.example.com \
+CERT_CHALLENGE=dns \
+CLOUDFLARE_API_TOKEN=your_token \
+AUTO_DEPLOY=4 \
+bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/23.14-05.13-2025/setup.sh)
 
-# 使用自签名证书 (推荐内网测试)
-DOMAIN=matrix.local TEST_MODE=true CERT_TYPE=self-signed AUTO_DEPLOY=4 bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/23.14-05.13-2025/setup.sh)
+# 使用Let's Encrypt Staging证书 (HTTP验证)
+DOMAIN=test.example.com \
+CERT_CHALLENGE=http \
+AUTO_DEPLOY=4 \
+bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/23.14-05.13-2025/setup.sh)
 ```
 
 ### **方法3: 环境变量方式**
 ```bash
 # 设置环境变量
-export DOMAIN="test.matrix.local"
+export DOMAIN="test.example.com"
 export TEST_MODE="true"
-export CERT_TYPE="self-signed"
+export CERT_TYPE="letsencrypt-staging"
+export CERT_CHALLENGE="dns"
+export CLOUDFLARE_API_TOKEN="your_token"
 export AUTO_DEPLOY="test"
 
 # 运行部署
 bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/23.14-05.13-2025/setup.sh)
 ```
 
-## 🔧 证书类型选择
+## 🔧 证书验证方式选择
 
-### **1. Let's Encrypt Staging证书**
+### **1. DNS验证** (推荐)
 ```bash
-CERT_TYPE="letsencrypt-staging"
+CERT_CHALLENGE="dns"
+DNS_PROVIDER="cloudflare"
+CLOUDFLARE_API_TOKEN="your_token"
 ```
-- ✅ 真实的ACME协议验证
-- ✅ 无申请速率限制
-- ✅ 适合测试自动化流程
-- ❌ 需要真实域名和DNS解析
-- ❌ 浏览器显示不安全
+- ✅ 无需开放80端口
+- ✅ 适合防火墙后的服务器
+- ✅ 支持通配符证书
+- ✅ 更安全的验证方式
+- ❌ 需要DNS API凭据
 
-### **2. 自签名证书** (推荐)
+### **2. HTTP验证**
 ```bash
-CERT_TYPE="self-signed"
+CERT_CHALLENGE="http"
 ```
-- ✅ 无需域名解析
-- ✅ 完全离线生成
-- ✅ 适合内网和本地测试
-- ✅ 支持多域名SAN
-- ❌ 浏览器显示不安全
+- ✅ 配置简单
+- ✅ 无需API凭据
+- ❌ 需要开放80端口
+- ❌ 需要公网HTTP访问
 
 ### **3. 自定义证书**
 ```bash
@@ -81,43 +91,46 @@ CUSTOM_KEY_PATH="/path/to/your.key"
 
 ## 📱 使用场景
 
-### **场景1: 本地开发测试**
+### **场景1: 开发环境测试**
 ```bash
-# 使用本地域名
-DOMAIN=matrix.local \
+# 使用开发域名 (DNS验证)
+DOMAIN=dev.example.com \
 TEST_MODE=true \
-CERT_TYPE=self-signed \
+CERT_CHALLENGE=dns \
+CLOUDFLARE_API_TOKEN=your_token \
 AUTO_DEPLOY=test \
 bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/23.14-05.13-2025/setup.sh)
 
 # 访问地址
-# https://matrix.local:8443 (需要添加hosts记录)
+# https://dev.example.com:8443
 ```
 
-### **场景2: 内网演示环境**
+### **场景2: 内网测试环境**
 ```bash
-# 使用内网IP或域名
-DOMAIN=192.168.1.100 \
+# 使用内网域名 (HTTP验证)
+DOMAIN=test.internal.com \
 TEST_MODE=true \
-CERT_TYPE=self-signed \
+CERT_CHALLENGE=http \
 AUTO_DEPLOY=test \
 bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/23.14-05.13-2025/setup.sh)
 
 # 访问地址
-# https://192.168.1.100:8443
+# https://test.internal.com:8443
 ```
 
 ### **场景3: 云服务器测试**
 ```bash
-# 使用测试域名
-DOMAIN=test.yourdomain.com \
+# 使用测试域名 (DNS验证推荐)
+DOMAIN=staging.yourdomain.com \
 TEST_MODE=true \
-CERT_TYPE=letsencrypt-staging \
+CERT_CHALLENGE=dns \
+DNS_PROVIDER=cloudflare \
+CLOUDFLARE_API_TOKEN=your_token \
 AUTO_DEPLOY=test \
 bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/23.14-05.13-2025/setup.sh)
 
 # 访问地址
-# https://test.yourdomain.com:8443
+# https://staging.yourdomain.com:8443
 ```
 
 ## 🔐 浏览器证书信任
@@ -146,14 +159,14 @@ openssl x509 -in /etc/letsencrypt/live/your-domain/fullchain.pem -out matrix-cer
 
 ## 🛠️ 配置自定义
 
-### **自签名证书配置**
+### **Let's Encrypt Staging配置**
 ```bash
 # 在ess-config-template.env中配置
-SELF_SIGNED_DAYS="365"           # 证书有效期
-SELF_SIGNED_COUNTRY="CN"         # 国家
-SELF_SIGNED_STATE="Beijing"      # 省份
-SELF_SIGNED_CITY="Beijing"       # 城市
-SELF_SIGNED_ORG="Test Matrix"    # 组织名称
+TEST_MODE="true"                 # 启用测试模式
+CERT_TYPE="letsencrypt-staging"  # 使用Staging证书
+CERT_CHALLENGE="dns"             # 验证方式
+DNS_PROVIDER="cloudflare"        # DNS提供商
+CLOUDFLARE_API_TOKEN="your_token" # API凭据
 ```
 
 ### **测试环境优化**
@@ -174,8 +187,11 @@ ENABLE_METRICS="false"           # 关闭监控 (节省资源)
 # 检查域名配置
 ./check-config.sh
 
-# 手动生成自签名证书
-openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes
+# 检查DNS API凭据
+echo $CLOUDFLARE_API_TOKEN
+
+# 手动测试DNS验证
+certbot certonly --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini --staging -d test.example.com --dry-run
 ```
 
 #### **2. 浏览器无法访问**
@@ -191,11 +207,13 @@ kubectl get pods -n ess
 
 #### **3. 域名解析问题**
 ```bash
-# 添加hosts记录 (本地测试)
-echo "127.0.0.1 matrix.local app.matrix.local mas.matrix.local" >> /etc/hosts
+# 检查域名解析
+dig test.example.com @8.8.8.8
+nslookup test.example.com
 
-# 或使用IP地址访问
-https://服务器IP:8443
+# 检查DNS API权限
+curl -X GET "https://api.cloudflare.com/client/v4/zones" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
 ```
 
 ## 📊 测试验证
