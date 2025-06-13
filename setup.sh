@@ -1541,11 +1541,15 @@ deploy_ess() {
     while true; do
         # 临时禁用set -e以防止kubectl命令失败导致脚本退出
         set +e
-        local running_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Running" 2>/dev/null | tr -d '\n' || echo "0")
-        local total_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | wc -l 2>/dev/null | tr -d '\n' || echo "0")
-        local completed_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Completed" 2>/dev/null | tr -d '\n' || echo "0")
-        local pending_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c "Pending" 2>/dev/null | tr -d '\n' || echo "0")
-        local failed_pods=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -c -E "(Error|CrashLoopBackOff|ImagePullBackOff)" 2>/dev/null | tr -d '\n' || echo "0")
+        # 获取Pod状态 - 基于实际Ready状态而不是Running状态
+        local pod_status=$(k3s kubectl get pods -n "$namespace" --no-headers 2>/dev/null || echo "")
+        local total_pods=$(echo "$pod_status" | wc -l 2>/dev/null | tr -d '\n' || echo "0")
+        local completed_pods=$(echo "$pod_status" | grep -c "Completed" 2>/dev/null | tr -d '\n' || echo "0")
+        local pending_pods=$(echo "$pod_status" | grep -c "Pending" 2>/dev/null | tr -d '\n' || echo "0")
+        local failed_pods=$(echo "$pod_status" | grep -c -E "(Error|CrashLoopBackOff|ImagePullBackOff)" 2>/dev/null | tr -d '\n' || echo "0")
+        # 检查Ready状态：格式为 "1/1" 或 "3/3" 等
+        local ready_pods=$(echo "$pod_status" | grep "Running" | awk '{if($2 ~ /^[0-9]+\/[0-9]+$/) {split($2,a,"/"); if(a[1]==a[2]) count++}} END {print count+0}' || echo "0")
+        local running_pods=$(echo "$pod_status" | grep -c "Running" 2>/dev/null | tr -d '\n' || echo "0")
         set -e  # 重新启用set -e
 
         # 确保所有变量都是纯数字，如果不是则设为0
@@ -2998,43 +3002,45 @@ full_deployment() {
     print_info "ESS部署完成，开始修复配置..."
 
     # 修复HAProxy配置（添加MAS路由规则）
-    if ! fix_haproxy_configuration; then
-        print_warning "HAProxy配置修复失败，但继续部署..."
-    fi
+    set +e  # 临时禁用set -e
+    fix_haproxy_configuration || print_warning "HAProxy配置修复失败，但继续部署..."
+    set -e  # 重新启用set -e
 
     # 修复MAS配置（添加端口号）
-    if ! fix_mas_configuration; then
-        print_warning "MAS配置修复失败，但继续部署..."
-    fi
+    set +e
+    fix_mas_configuration || print_warning "MAS配置修复失败，但继续部署..."
+    set -e
 
     # 修复Well-known配置（添加端口号）
-    if ! fix_wellknown_configuration; then
-        print_warning "Well-known配置修复失败，但继续部署..."
-    fi
+    set +e
+    fix_wellknown_configuration || print_warning "Well-known配置修复失败，但继续部署..."
+    set -e
 
     # 修复Element Web配置（添加端口号）
-    if ! fix_element_web_configuration; then
-        print_warning "Element Web配置修复失败，但继续部署..."
-    fi
+    set +e
+    fix_element_web_configuration || print_warning "Element Web配置修复失败，但继续部署..."
+    set -e
 
     # 创建SSL证书
-    if ! create_ssl_certificates; then
-        print_warning "SSL证书创建失败，但继续部署..."
-    fi
+    set +e
+    create_ssl_certificates || print_warning "SSL证书创建失败，但继续部署..."
+    set -e
 
     # 配置ServiceLB和网络访问
     setup_servicelb_and_network
 
     # 创建管理员用户
-    if ! create_admin_user; then
+    set +e
+    create_admin_user || {
         print_warning "管理员用户创建失败，但部署继续..."
         print_info "您可以稍后手动创建管理员用户"
-    fi
+    }
+    set -e
 
     # 验证部署
-    if ! verify_deployment; then
-        print_warning "部署验证失败，但基础服务可能已正常运行"
-    fi
+    set +e
+    verify_deployment || print_warning "部署验证失败，但基础服务可能已正常运行"
+    set -e
 
     # 显示完成信息（无论前面步骤是否成功）
     show_deployment_summary
