@@ -322,14 +322,22 @@ generate_ess_values() {
     print_warning "deploy.sh配置不完整，需要使用setup.sh中的完整配置"
     print_info "建议使用setup.sh进行部署，而不是直接运行deploy.sh"
 
-    # 检查是否存在完整的ESS配置
-    local setup_values="$INSTALL_DIR/ess-values.yaml"
-    if [[ -f "$setup_values" ]]; then
-        print_info "发现setup.sh生成的完整配置，复制使用..."
-        cp "$setup_values" "$values_file"
-        print_success "已使用完整的ESS配置: $values_file"
-        return 0
-    fi
+    # 检查是否存在完整的ESS配置 (多个可能的路径)
+    local possible_paths=(
+        "$INSTALL_DIR/ess-values.yaml"
+        "$SCRIPT_DIR/ess-values.yaml"
+        "/opt/matrix/ess-values.yaml"
+        "/opt/matrix-ess-setup/ess-values.yaml"
+    )
+
+    for setup_values in "${possible_paths[@]}"; do
+        if [[ -f "$setup_values" ]]; then
+            print_info "发现setup.sh生成的完整配置: $setup_values"
+            cp "$setup_values" "$values_file"
+            print_success "已使用完整的ESS配置: $values_file"
+            return 0
+        fi
+    done
 
     print_warning "未找到完整配置，生成简化版本（可能不完整）"
 
@@ -381,12 +389,12 @@ synapse:
   ingress:
     host: "$SYNAPSE_HOST"
 
-# Well-known委托配置
+# Well-known委托配置 (支持自定义端口)
 wellKnownDelegation:
   enabled: true
   additional:
-    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST/","account":"https://$AUTH_HOST/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST"}]}'
-    server: '{"m.server":"$SYNAPSE_HOST:443"}'
+    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST:${HTTPS_PORT:-443}"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST:${HTTPS_PORT:-443}/","account":"https://$AUTH_HOST:${HTTPS_PORT:-443}/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST:${HTTPS_PORT:-443}"}]}'
+    server: '{"m.server":"$SYNAPSE_HOST:${FEDERATION_PORT:-443}"}'
 EOF
 
     print_warning "ESS配置文件已生成（简化版本）: $values_file"
@@ -535,7 +543,14 @@ main() {
     # 执行部署步骤
     deploy_k3s
     deploy_helm
-    deploy_cert_manager
+
+    # 检查是否需要cert-manager (v4.0.0使用外部反向代理，可能不需要)
+    if [[ "${ESS_EXTERNAL_SSL:-}" == "true" ]]; then
+        print_info "检测到外部SSL配置，跳过cert-manager安装"
+    else
+        deploy_cert_manager
+    fi
+
     deploy_ess
     wait_for_pods
     create_admin_user

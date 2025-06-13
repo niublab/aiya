@@ -187,7 +187,7 @@ download_scripts() {
     print_step "下载必要的脚本文件"
 
     local base_url="https://raw.githubusercontent.com/niublab/aiya/main/16.30-06.13-2025"
-    local scripts=("deploy.sh" "cleanup.sh" "fix-config.sh")
+    local scripts=("deploy.sh" "cleanup.sh")
 
     for script in "${scripts[@]}"; do
         print_info "下载 $script..."
