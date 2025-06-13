@@ -449,9 +449,11 @@ show_config_details() {
         HTTPS_PORT=$(grep "^HTTPS_PORT=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
         FEDERATION_PORT=$(grep "^FEDERATION_PORT=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
         WEBRTC_TCP_PORT=$(grep "^WEBRTC_TCP_PORT=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
-        IP_METHOD=$(grep "^IP_METHOD=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        IP_METHOD=$(grep "^IP_METHOD=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "ddns")
         ADMIN_USERNAME=$(grep "^ADMIN_USERNAME=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
         CERT_EMAIL=$(grep "^CERT_EMAIL=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        # 设置默认的PUBLIC_IP变量，避免未定义错误
+        PUBLIC_IP="未获取"
     }
 
     print_step "当前配置详情"
@@ -481,7 +483,7 @@ show_config_details() {
 
     echo -e "${WHITE}网络配置:${NC}"
     echo "  IP获取方式: $IP_METHOD"
-    echo "  公网IP: $(eval echo $PUBLIC_IP 2>/dev/null || echo '未获取')"
+    echo "  公网IP: ${PUBLIC_IP:-未获取}"
     echo
 
     echo -e "${WHITE}管理员配置:${NC}"

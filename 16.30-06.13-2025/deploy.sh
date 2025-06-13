@@ -9,6 +9,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/matrix-config.env"
 
+# ESS官方最新版本信息 (与setup.sh保持一致)
+readonly ESS_VERSION="25.6.1"
+readonly ESS_CHART_OCI="oci://ghcr.io/element-hq/ess-helm/matrix-stack"
+readonly K3S_VERSION="v1.32.5+k3s1"
+readonly HELM_VERSION="v3.18.2"
+
 # 颜色定义
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
@@ -138,15 +144,29 @@ EOF
 
 generate_ess_values() {
     print_step "生成ESS配置"
-    
+
     local values_file="$SCRIPT_DIR/ess-values.yaml"
-    
-    print_info "基于ESS官方最新规范生成配置..."
-    
+
+    print_info "基于ESS官方最新规范生成完整配置..."
+    print_warning "deploy.sh配置不完整，需要使用setup.sh中的完整配置"
+    print_info "建议使用setup.sh进行部署，而不是直接运行deploy.sh"
+
+    # 检查是否存在完整的ESS配置
+    local setup_values="$INSTALL_DIR/ess-values.yaml"
+    if [[ -f "$setup_values" ]]; then
+        print_info "发现setup.sh生成的完整配置，复制使用..."
+        cp "$setup_values" "$values_file"
+        print_success "已使用完整的ESS配置: $values_file"
+        return 0
+    fi
+
+    print_warning "未找到完整配置，生成简化版本（可能不完整）"
+
     cat > "$values_file" << EOF
-# Matrix ESS Community 配置文件
+# Matrix ESS Community 配置文件 (简化版本)
 # 基于ESS官方最新规范 $ESS_VERSION
 # 生成时间: $(date)
+# 警告: 这是简化配置，建议使用setup.sh进行完整部署
 
 # 服务器名称
 serverName: "$SERVER_NAME"
@@ -197,8 +217,9 @@ wellKnownDelegation:
     client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST:$HTTPS_PORT"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST:$HTTPS_PORT/","account":"https://$AUTH_HOST:$HTTPS_PORT/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST:$HTTPS_PORT"}]}'
     server: '{"m.server":"$SYNAPSE_HOST:$HTTPS_PORT"}'
 EOF
-    
-    print_success "ESS配置文件已生成: $values_file"
+
+    print_warning "ESS配置文件已生成（简化版本）: $values_file"
+    print_info "建议使用setup.sh进行完整部署以获得所有功能"
 }
 
 deploy_ess() {
