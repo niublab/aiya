@@ -194,8 +194,8 @@ haproxy:
 wellKnownDelegation:
   enabled: true
   additional:
-    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST/","account":"https://$AUTH_HOST/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST"}]}'
-    server: '{"m.server":"$SYNAPSE_HOST:443"}'
+    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST:$HTTPS_PORT"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST:$HTTPS_PORT/","account":"https://$AUTH_HOST:$HTTPS_PORT/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST:$HTTPS_PORT"}]}'
+    server: '{"m.server":"$SYNAPSE_HOST:$HTTPS_PORT"}'
 EOF
     
     print_success "ESS配置文件已生成: $values_file"
@@ -272,10 +272,10 @@ show_deployment_info() {
     print_success "Matrix ESS Community 部署成功！"
     echo
     print_info "访问地址:"
-    echo "  Element Web: https://$WEB_HOST"
-    echo "  认证服务: https://$AUTH_HOST"
-    echo "  RTC服务: https://$RTC_HOST"
-    echo "  Synapse: https://$SYNAPSE_HOST"
+    echo "  Element Web: https://$WEB_HOST:$HTTPS_PORT"
+    echo "  认证服务: https://$AUTH_HOST:$HTTPS_PORT"
+    echo "  RTC服务: https://$RTC_HOST:$HTTPS_PORT"
+    echo "  Synapse: https://$SYNAPSE_HOST:$HTTPS_PORT"
     echo
     print_info "管理员账户:"
     echo "  用户名: $ADMIN_USERNAME"
@@ -295,10 +295,10 @@ Matrix ESS Community 部署信息
 ESS版本: $ESS_VERSION
 
 访问地址:
-- Element Web: https://$WEB_HOST
-- 认证服务: https://$AUTH_HOST
-- RTC服务: https://$RTC_HOST
-- Synapse: https://$SYNAPSE_HOST
+- Element Web: https://$WEB_HOST:$HTTPS_PORT
+- 认证服务: https://$AUTH_HOST:$HTTPS_PORT
+- RTC服务: https://$RTC_HOST:$HTTPS_PORT
+- Synapse: https://$SYNAPSE_HOST:$HTTPS_PORT
 
 管理员账户:
 - 用户名: $ADMIN_USERNAME

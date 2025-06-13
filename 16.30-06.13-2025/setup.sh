@@ -715,6 +715,11 @@ haproxy:
 wellKnownDelegation:
   enabled: true
 
+  # 主域名重定向到Element Web (使用自定义端口)
+  baseDomainRedirect:
+    enabled: true
+    url: "https://$WEB_HOST:$HTTPS_PORT"
+
   # 基于官方规范的配置，使用自定义端口
   additional:
     client: |
