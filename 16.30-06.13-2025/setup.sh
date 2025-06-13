@@ -169,12 +169,29 @@ init_dynamic_config() {
 collect_config() {
     print_step "配置收集"
 
-    # 如果配置文件存在，询问是否重用
+    # 如果配置文件存在，询问是否重新设置
     if [[ -f "$CONFIG_FILE" ]]; then
         print_info "发现现有配置文件: $CONFIG_FILE"
-        if confirm "是否重用现有配置" "y"; then
-            source "$CONFIG_FILE"
-            print_success "已加载现有配置"
+
+        # 显示现有配置摘要
+        if source "$CONFIG_FILE" 2>/dev/null; then
+            print_info "现有配置摘要:"
+            echo "  主域名: ${MAIN_DOMAIN:-未设置}"
+            echo "  Element Web: ${WEB_HOST:-未设置}"
+            echo "  认证服务: ${AUTH_HOST:-未设置}"
+            echo "  RTC服务: ${RTC_HOST:-未设置}"
+            echo "  Matrix服务器: ${SERVER_NAME:-未设置}"
+            echo "  安装目录: ${INSTALL_DIR:-未设置}"
+            echo "  HTTP端口: ${HTTP_PORT:-未设置}"
+            echo "  HTTPS端口: ${HTTPS_PORT:-未设置}"
+            echo
+        fi
+
+        # 默认不重新设置，直接使用现有配置
+        if confirm "是否重新设置配置" "n"; then
+            print_info "开始重新配置..."
+        else
+            print_success "使用现有配置，跳过配置收集"
             return 0
         fi
     fi
@@ -406,6 +423,60 @@ EOF
 
     chmod 600 "$CONFIG_FILE"
     print_info "配置已保存到: $CONFIG_FILE"
+}
+
+# 显示配置详情
+show_config_details() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        print_warning "配置文件不存在"
+        return 1
+    fi
+
+    source "$CONFIG_FILE"
+
+    print_step "当前配置详情"
+
+    echo -e "${WHITE}域名配置:${NC}"
+    echo "  主域名: $MAIN_DOMAIN"
+    echo "  Matrix服务器: $SERVER_NAME"
+    echo "  Element Web: $WEB_HOST"
+    echo "  认证服务: $AUTH_HOST"
+    echo "  RTC服务: $RTC_HOST"
+    echo "  Synapse: $SYNAPSE_HOST"
+    echo
+
+    echo -e "${WHITE}路径配置:${NC}"
+    echo "  脚本目录: $SCRIPT_DIR"
+    echo "  安装目录: $INSTALL_DIR"
+    echo "  配置文件: $CONFIG_FILE"
+    echo
+
+    echo -e "${WHITE}端口配置:${NC}"
+    echo "  HTTP端口: $HTTP_PORT"
+    echo "  HTTPS端口: $HTTPS_PORT"
+    echo "  联邦端口: $FEDERATION_PORT"
+    echo "  WebRTC TCP: $WEBRTC_TCP_PORT"
+    echo "  WebRTC UDP: $WEBRTC_UDP_PORT"
+    echo
+
+    echo -e "${WHITE}网络配置:${NC}"
+    echo "  IP获取方式: $IP_METHOD"
+    echo "  公网IP: $(eval echo $PUBLIC_IP 2>/dev/null || echo '未获取')"
+    echo
+
+    echo -e "${WHITE}管理员配置:${NC}"
+    echo "  用户名: $ADMIN_USERNAME"
+    echo "  密码: [已设置]"
+    echo
+
+    echo -e "${WHITE}证书配置:${NC}"
+    echo "  邮箱: $CERT_EMAIL"
+    echo
+
+    echo -e "${WHITE}版本信息:${NC}"
+    echo "  ESS版本: $ESS_VERSION"
+    echo "  K3s版本: $K3S_VERSION"
+    echo "  Helm版本: $HELM_VERSION"
 }
 
 # 网络检测函数 - 遵循需求文档要求
@@ -666,11 +737,28 @@ main() {
         case $choice in
             1)
                 print_step "开始一键部署"
+
+                # 收集或加载配置
                 collect_config
+
+                # 确保配置已加载
+                if [[ -f "$CONFIG_FILE" ]]; then
+                    source "$CONFIG_FILE"
+                else
+                    print_error "配置文件不存在，无法继续部署"
+                    read -p "按回车键继续..."
+                    continue
+                fi
+
+                # 网络连通性检测
                 test_network_connectivity
+
+                # 生成ESS配置文件
                 generate_ess_values
 
+                # 显示配置摘要
                 print_info "配置摘要:"
+                echo "  主域名: $MAIN_DOMAIN"
                 echo "  服务器域名: $SERVER_NAME"
                 echo "  Element Web: $WEB_HOST"
                 echo "  认证服务: $AUTH_HOST"
@@ -680,6 +768,7 @@ main() {
                 echo "  HTTP端口: $HTTP_PORT"
                 echo "  HTTPS端口: $HTTPS_PORT"
                 echo "  联邦端口: $FEDERATION_PORT"
+                echo "  IP获取方式: $IP_METHOD"
                 echo
 
                 if confirm "确认开始部署" "y"; then
@@ -696,18 +785,54 @@ main() {
                 ;;
             2)
                 if [[ -f "$CONFIG_FILE" ]]; then
-                    # 加载配置
-                    source "$CONFIG_FILE"
-                    print_info "当前配置:"
-                    echo "  服务器域名: $SERVER_NAME"
-                    echo "  安装目录: $INSTALL_DIR"
-                    echo "  配置文件: $CONFIG_FILE"
+                    # 显示配置详情
+                    show_config_details
+                    echo
 
-                    if [[ -f "$SCRIPT_DIR/manage.sh" ]]; then
-                        "$SCRIPT_DIR/manage.sh"
-                    else
-                        print_info "管理功能开发中..."
-                    fi
+                    print_info "管理选项:"
+                    echo "  1) 查看部署状态"
+                    echo "  2) 重新部署"
+                    echo "  3) 更新配置"
+                    echo "  4) 返回主菜单"
+
+                    read -p "请选择 [1-4]: " manage_choice
+
+                    case $manage_choice in
+                        1)
+                            print_info "查看部署状态..."
+                            if command -v k3s &> /dev/null; then
+                                echo "K3s状态:"
+                                systemctl is-active k3s && echo "  ✅ K3s运行正常" || echo "  ❌ K3s未运行"
+
+                                if k3s kubectl get namespace ess &> /dev/null; then
+                                    echo "ESS状态:"
+                                    k3s kubectl get pods -n ess
+                                else
+                                    echo "  ❌ ESS未部署"
+                                fi
+                            else
+                                echo "  ❌ K3s未安装"
+                            fi
+                            ;;
+                        2)
+                            print_info "重新部署..."
+                            if [[ -f "$SCRIPT_DIR/deploy.sh" ]]; then
+                                "$SCRIPT_DIR/deploy.sh"
+                            else
+                                print_warning "部署脚本不存在"
+                            fi
+                            ;;
+                        3)
+                            print_info "更新配置..."
+                            collect_config
+                            ;;
+                        4)
+                            print_info "返回主菜单"
+                            ;;
+                        *)
+                            print_error "无效选择"
+                            ;;
+                    esac
                 else
                     print_warning "未找到现有部署，请先执行部署"
                 fi
