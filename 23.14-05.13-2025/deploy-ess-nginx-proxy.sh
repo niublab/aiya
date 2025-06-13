@@ -240,10 +240,19 @@ install_dns_plugins() {
     case "$dns_provider" in
         "cloudflare")
             if command -v apt &> /dev/null; then
-                apt update
-                apt install -y python3-certbot-dns-cloudflare
+                # 检查是否已安装
+                if ! dpkg -l | grep -q python3-certbot-dns-cloudflare; then
+                    print_info "更新包列表..."
+                    apt update
+                    print_info "安装Cloudflare DNS插件..."
+                    apt install -y python3-certbot-dns-cloudflare
+                else
+                    print_info "Cloudflare DNS插件已安装"
+                fi
             elif command -v yum &> /dev/null; then
                 yum install -y python3-certbot-dns-cloudflare
+            elif command -v dnf &> /dev/null; then
+                dnf install -y python3-certbot-dns-cloudflare
             else
                 print_error "不支持的包管理器"
                 exit 1
@@ -251,16 +260,22 @@ install_dns_plugins() {
             ;;
         "route53")
             if command -v apt &> /dev/null; then
+                apt update
                 apt install -y python3-certbot-dns-route53
             elif command -v yum &> /dev/null; then
                 yum install -y python3-certbot-dns-route53
+            elif command -v dnf &> /dev/null; then
+                dnf install -y python3-certbot-dns-route53
             fi
             ;;
         "digitalocean")
             if command -v apt &> /dev/null; then
+                apt update
                 apt install -y python3-certbot-dns-digitalocean
             elif command -v yum &> /dev/null; then
                 yum install -y python3-certbot-dns-digitalocean
+            elif command -v dnf &> /dev/null; then
+                dnf install -y python3-certbot-dns-digitalocean
             fi
             ;;
         *)
@@ -268,7 +283,34 @@ install_dns_plugins() {
             ;;
     esac
 
-    print_success "DNS验证插件安装完成"
+    # 验证插件安装
+    case "$dns_provider" in
+        "cloudflare")
+            if certbot plugins | grep -q dns-cloudflare; then
+                print_success "Cloudflare DNS插件安装成功"
+            else
+                print_error "Cloudflare DNS插件安装失败"
+                print_info "尝试手动安装: pip3 install certbot-dns-cloudflare"
+                exit 1
+            fi
+            ;;
+        "route53")
+            if certbot plugins | grep -q dns-route53; then
+                print_success "Route53 DNS插件安装成功"
+            else
+                print_error "Route53 DNS插件安装失败"
+                exit 1
+            fi
+            ;;
+        "digitalocean")
+            if certbot plugins | grep -q dns-digitalocean; then
+                print_success "DigitalOcean DNS插件安装成功"
+            else
+                print_error "DigitalOcean DNS插件安装失败"
+                exit 1
+            fi
+            ;;
+    esac
 }
 
 # 配置DNS验证凭据
@@ -331,6 +373,60 @@ EOF
     esac
 }
 
+# 预检查DNS配置
+precheck_dns_config() {
+    local dns_provider="${DNS_PROVIDER:-cloudflare}"
+
+    print_info "预检查DNS配置..."
+
+    case "$dns_provider" in
+        "cloudflare")
+            if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+                print_error "Cloudflare API Token未设置"
+                return 1
+            fi
+
+            print_info "测试Cloudflare API连接..."
+            if curl -s -X GET "https://api.cloudflare.com/client/v4/zones" \
+                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                -H "Content-Type: application/json" | grep -q '"success":true'; then
+                print_success "Cloudflare API连接正常"
+            else
+                print_error "Cloudflare API连接失败"
+                print_info "请检查API Token是否正确"
+                return 1
+            fi
+            ;;
+        "route53")
+            if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+                print_error "AWS凭据未设置"
+                return 1
+            fi
+            print_info "AWS Route53凭据已设置"
+            ;;
+        "digitalocean")
+            if [[ -z "${DO_API_TOKEN:-}" ]]; then
+                print_error "DigitalOcean API Token未设置"
+                return 1
+            fi
+            print_info "DigitalOcean API Token已设置"
+            ;;
+    esac
+
+    # 检查域名解析
+    print_info "检查域名解析..."
+    for subdomain in "" "app." "mas." "rtc." "matrix."; do
+        local full_domain="${subdomain}${DOMAIN}"
+        if dig +short "$full_domain" @8.8.8.8 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' > /dev/null; then
+            print_success "域名解析正常: $full_domain"
+        else
+            print_warning "域名解析可能有问题: $full_domain"
+        fi
+    done
+
+    return 0
+}
+
 # 生成Let's Encrypt证书
 generate_letsencrypt_cert() {
     local email="$1"
@@ -349,34 +445,47 @@ generate_letsencrypt_cert() {
         # DNS验证
         print_info "使用DNS验证方式: $dns_provider"
 
+        # 预检查DNS配置
+        if ! precheck_dns_config; then
+            print_error "DNS配置预检查失败"
+            exit 1
+        fi
+
         # 安装DNS插件
         install_dns_plugins
 
         # 配置DNS凭据
         setup_dns_credentials
 
-        # 构建certbot命令
-        local certbot_cmd="certbot certonly --agree-tos --no-eff-email"
-        certbot_cmd="$certbot_cmd --email \"$email\""
-        certbot_cmd="$certbot_cmd -d \"$DOMAIN\""
-        certbot_cmd="$certbot_cmd -d \"app.$DOMAIN\""
-        certbot_cmd="$certbot_cmd -d \"mas.$DOMAIN\""
-        certbot_cmd="$certbot_cmd -d \"rtc.$DOMAIN\""
-        certbot_cmd="$certbot_cmd -d \"matrix.$DOMAIN\""
+        # 构建certbot命令数组
+        local certbot_args=(
+            "certbot" "certonly"
+            "--agree-tos"
+            "--no-eff-email"
+            "--email" "$email"
+            "-d" "$DOMAIN"
+            "-d" "app.$DOMAIN"
+            "-d" "mas.$DOMAIN"
+            "-d" "rtc.$DOMAIN"
+            "-d" "matrix.$DOMAIN"
+        )
 
         # 添加DNS插件参数
         case "$dns_provider" in
             "cloudflare")
-                certbot_cmd="$certbot_cmd --dns-cloudflare"
-                certbot_cmd="$certbot_cmd --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini"
+                certbot_args+=("--dns-cloudflare")
+                certbot_args+=("--dns-cloudflare-credentials" "/etc/letsencrypt/cloudflare.ini")
+                certbot_args+=("--dns-cloudflare-propagation-seconds" "60")
                 ;;
             "route53")
-                certbot_cmd="$certbot_cmd --dns-route53"
-                certbot_cmd="$certbot_cmd --dns-route53-credentials /etc/letsencrypt/route53.ini"
+                certbot_args+=("--dns-route53")
+                certbot_args+=("--dns-route53-credentials" "/etc/letsencrypt/route53.ini")
+                certbot_args+=("--dns-route53-propagation-seconds" "30")
                 ;;
             "digitalocean")
-                certbot_cmd="$certbot_cmd --dns-digitalocean"
-                certbot_cmd="$certbot_cmd --dns-digitalocean-credentials /etc/letsencrypt/digitalocean.ini"
+                certbot_args+=("--dns-digitalocean")
+                certbot_args+=("--dns-digitalocean-credentials" "/etc/letsencrypt/digitalocean.ini")
+                certbot_args+=("--dns-digitalocean-propagation-seconds" "60")
                 ;;
             *)
                 print_error "不支持的DNS提供商: $dns_provider"
@@ -384,12 +493,31 @@ generate_letsencrypt_cert() {
                 ;;
         esac
 
+        # 添加staging标志
         if [[ -n "$staging_flag" ]]; then
-            certbot_cmd="$certbot_cmd $staging_flag"
+            certbot_args+=("$staging_flag")
+        fi
+
+        # 添加详细输出
+        certbot_args+=("--verbose")
+
+        # 如果是调试模式，先进行dry-run
+        if [[ "${DEBUG:-false}" == "true" ]]; then
+            print_info "调试模式: 先进行dry-run测试..."
+            local test_args=("${certbot_args[@]}" "--dry-run")
+            print_info "测试命令: ${test_args[*]}"
+
+            if "${test_args[@]}"; then
+                print_success "Dry-run测试成功，继续正式申请..."
+            else
+                print_error "Dry-run测试失败，请检查配置"
+                exit 1
+            fi
         fi
 
         print_info "执行DNS验证..."
         print_info "这可能需要几分钟时间等待DNS传播..."
+        print_info "执行命令: ${certbot_args[*]}"
 
     else
         # HTTP验证 (原有方式)
@@ -399,22 +527,34 @@ generate_letsencrypt_cert() {
         # 停止nginx以释放80端口
         systemctl stop nginx || true
 
-        # 构建certbot命令
-        local certbot_cmd="certbot certonly --standalone --agree-tos --no-eff-email"
-        certbot_cmd="$certbot_cmd --email \"$email\""
-        certbot_cmd="$certbot_cmd -d \"$DOMAIN\""
-        certbot_cmd="$certbot_cmd -d \"app.$DOMAIN\""
-        certbot_cmd="$certbot_cmd -d \"mas.$DOMAIN\""
-        certbot_cmd="$certbot_cmd -d \"rtc.$DOMAIN\""
-        certbot_cmd="$certbot_cmd -d \"matrix.$DOMAIN\""
+        # 构建certbot命令数组
+        local certbot_args=(
+            "certbot" "certonly"
+            "--standalone"
+            "--agree-tos"
+            "--no-eff-email"
+            "--email" "$email"
+            "-d" "$DOMAIN"
+            "-d" "app.$DOMAIN"
+            "-d" "mas.$DOMAIN"
+            "-d" "rtc.$DOMAIN"
+            "-d" "matrix.$DOMAIN"
+        )
 
+        # 添加staging标志
         if [[ -n "$staging_flag" ]]; then
-            certbot_cmd="$certbot_cmd $staging_flag"
+            certbot_args+=("$staging_flag")
         fi
+
+        # 添加详细输出
+        certbot_args+=("--verbose")
+
+        print_info "执行HTTP验证..."
+        print_info "执行命令: ${certbot_args[*]}"
     fi
 
     # 执行证书生成
-    if eval "$certbot_cmd"; then
+    if "${certbot_args[@]}"; then
         print_success "Let's Encrypt证书生成成功"
         if [[ -n "$staging_flag" ]]; then
             print_warning "注意: 这是测试证书，浏览器会显示不安全警告"
@@ -425,17 +565,58 @@ generate_letsencrypt_cert() {
         openssl x509 -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" -text -noout | grep -E "(Subject:|DNS:|Not After)"
 
     else
-        print_error "Let's Encrypt证书生成失败"
-        print_info "请检查:"
-        if [[ "$challenge" == "dns" ]]; then
-            print_info "1. DNS API凭据是否正确"
-            print_info "2. API Token权限是否足够"
-            print_info "3. 域名是否在DNS提供商管理"
-        else
-            print_info "1. 域名是否正确解析到此服务器"
-            print_info "2. 80端口是否可以从互联网访问"
-            print_info "3. 防火墙是否阻止了连接"
+        local exit_code=$?
+        print_error "Let's Encrypt证书生成失败 (退出码: $exit_code)"
+
+        # 显示详细的错误信息
+        print_info "查看详细错误日志:"
+        echo "----------------------------------------"
+        if [[ -f "/var/log/letsencrypt/letsencrypt.log" ]]; then
+            tail -20 /var/log/letsencrypt/letsencrypt.log
         fi
+        echo "----------------------------------------"
+
+        print_info "常见问题排查:"
+        if [[ "$challenge" == "dns" ]]; then
+            print_info "DNS验证问题排查:"
+            print_info "1. 检查DNS API凭据:"
+            case "$dns_provider" in
+                "cloudflare")
+                    print_info "   - API Token是否正确: ${CLOUDFLARE_API_TOKEN:0:10}..."
+                    print_info "   - 测试API连接:"
+                    print_info "     curl -X GET 'https://api.cloudflare.com/client/v4/zones' -H 'Authorization: Bearer $CLOUDFLARE_API_TOKEN'"
+                    ;;
+                "route53")
+                    print_info "   - AWS凭据是否正确"
+                    print_info "   - IAM权限是否足够"
+                    ;;
+                "digitalocean")
+                    print_info "   - DO API Token是否正确"
+                    ;;
+            esac
+            print_info "2. 检查域名解析:"
+            print_info "   dig $DOMAIN @8.8.8.8"
+            print_info "3. 检查DNS插件:"
+            print_info "   certbot plugins"
+            print_info "4. 手动测试DNS验证:"
+            print_info "   certbot certonly --dns-$dns_provider --dns-$dns_provider-credentials /etc/letsencrypt/$dns_provider.ini --dry-run -d $DOMAIN"
+        else
+            print_info "HTTP验证问题排查:"
+            print_info "1. 检查域名解析:"
+            print_info "   dig $DOMAIN @8.8.8.8"
+            print_info "2. 检查80端口:"
+            print_info "   netstat -tlnp | grep :80"
+            print_info "3. 检查防火墙:"
+            print_info "   ufw status"
+            print_info "4. 测试HTTP访问:"
+            print_info "   curl -I http://$DOMAIN/.well-known/acme-challenge/test"
+        fi
+
+        print_info "获取更多帮助:"
+        print_info "- Let's Encrypt社区: https://community.letsencrypt.org"
+        print_info "- 查看完整日志: cat /var/log/letsencrypt/letsencrypt.log"
+        print_info "- 重新运行调试: certbot --help"
+
         exit 1
     fi
 }
