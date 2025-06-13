@@ -1087,25 +1087,73 @@ configure_traefik() {
     # 检查Traefik是否已启用（K3s默认启用）
     print_info "检查Traefik状态..."
 
-    # 等待Traefik Pod启动
-    local retry_count=0
-    while ! k3s kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik --no-headers 2>/dev/null | grep -q "Running"; do
-        if [ $retry_count -ge 30 ]; then
-            print_warning "Traefik Pod未在5分钟内启动，可能被禁用"
+    # 首先检查Traefik服务是否存在
+    if ! k3s kubectl get service traefik -n kube-system &> /dev/null; then
+        print_warning "未检测到Traefik服务，可能已被禁用"
+        print_info "ESS需要Ingress控制器，建议重新安装K3s并启用Traefik"
+        return 1
+    fi
+
+    # 检查Traefik Pod，使用多种标签选择器
+    print_info "检查Traefik Pod状态..."
+    local traefik_found=false
+    local pod_selectors=("app.kubernetes.io/name=traefik" "app=traefik" "k8s-app=traefik")
+
+    for selector in "${pod_selectors[@]}"; do
+        if k3s kubectl get pods -n kube-system -l "$selector" --no-headers 2>/dev/null | grep -q ""; then
+            print_info "找到Traefik Pod (使用选择器: $selector)"
+            traefik_found=true
             break
         fi
-        print_info "等待Traefik Pod启动... ($((retry_count + 1))/30)"
+    done
+
+    if [[ "$traefik_found" == "false" ]]; then
+        print_warning "未找到Traefik Pod，启动诊断..."
+        diagnose_traefik
+        print_error "Traefik未正确安装或启动，无法继续"
+        return 1
+    fi
+
+    # 等待Traefik Pod启动
+    print_info "等待Traefik Pod就绪..."
+    local retry_count=0
+    local max_retries=60  # 增加到10分钟
+
+    while true; do
+        local traefik_running=false
+
+        # 检查所有可能的标签选择器
+        for selector in "${pod_selectors[@]}"; do
+            if k3s kubectl get pods -n kube-system -l "$selector" --no-headers 2>/dev/null | grep -q "Running"; then
+                traefik_running=true
+                break
+            fi
+        done
+
+        if [[ "$traefik_running" == "true" ]]; then
+            print_success "Traefik Pod已启动"
+            break
+        fi
+
+        if [ $retry_count -ge $max_retries ]; then
+            print_warning "Traefik Pod未在10分钟内启动"
+            print_info "当前kube-system中的Pod状态:"
+            k3s kubectl get pods -n kube-system | grep -i traefik || true
+            print_info "继续配置，但可能需要手动检查Traefik状态"
+            break
+        fi
+
+        print_info "等待Traefik Pod启动... ($((retry_count + 1))/$max_retries)"
         sleep 10
         ((retry_count++))
     done
 
-    # 检查Traefik服务是否存在
-    if k3s kubectl get service traefik -n kube-system &> /dev/null; then
-        print_success "检测到K3s内置Traefik服务"
+    # Traefik服务已在上面检查过，直接配置
+    print_success "检测到K3s内置Traefik服务"
 
-        # 配置Traefik使用固定NodePort
-        print_info "配置Traefik使用固定NodePort端口..."
-        print_info "HTTP NodePort: $NODEPORT_HTTP, HTTPS NodePort: $NODEPORT_HTTPS, 联邦NodePort: $NODEPORT_FEDERATION"
+    # 配置Traefik使用固定NodePort
+    print_info "配置Traefik使用固定NodePort端口..."
+    print_info "HTTP NodePort: $NODEPORT_HTTP, HTTPS NodePort: $NODEPORT_HTTPS, 联邦NodePort: $NODEPORT_FEDERATION"
 
         cat << EOF | k3s kubectl apply -f -
 apiVersion: helm.cattle.io/v1
@@ -1144,11 +1192,36 @@ EOF
         k3s kubectl rollout status deployment traefik -n kube-system --timeout=300s || true
 
         print_success "Traefik配置完成"
+}
+
+# 诊断Traefik问题
+diagnose_traefik() {
+    print_step "诊断Traefik问题"
+
+    print_info "检查K3s服务状态..."
+    systemctl status k3s --no-pager || true
+
+    print_info "检查kube-system命名空间中的所有Pod..."
+    k3s kubectl get pods -n kube-system || true
+
+    print_info "检查kube-system命名空间中的所有服务..."
+    k3s kubectl get services -n kube-system || true
+
+    print_info "检查Traefik相关资源..."
+    k3s kubectl get all -n kube-system | grep -i traefik || echo "未找到Traefik相关资源"
+
+    print_info "检查K3s配置..."
+    if [[ -f /etc/rancher/k3s/config.yaml ]]; then
+        echo "K3s配置文件内容:"
+        cat /etc/rancher/k3s/config.yaml
     else
-        print_warning "未检测到Traefik服务，可能已被禁用"
-        print_info "ESS需要Ingress控制器，建议重新安装K3s并启用Traefik"
-        return 1
+        echo "未找到K3s配置文件"
     fi
+
+    print_info "检查K3s启动参数..."
+    ps aux | grep k3s || true
+
+    print_info "如果Traefik被禁用，可以尝试重新安装K3s并确保启用Traefik"
 }
 
 install_helm() {
