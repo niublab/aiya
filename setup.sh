@@ -1424,40 +1424,35 @@ generate_ess_values() {
 # 服务器名称 (必需)
 serverName: "$SERVER_NAME"
 
-# Element Web配置 - 仅包含支持的属性
+# 全局Ingress配置 - 基于官方规范
+ingress:
+  annotations:
+    cert-manager.io/cluster-issuer: "$issuer_name"
+  tlsSecret: "ess-tls-secret"
+
+# Element Web配置
 elementWeb:
   ingress:
     host: "$WEB_HOST"
-    annotations:
-      cert-manager.io/cluster-issuer: "$issuer_name"
 
-# Matrix Authentication Service配置 - 仅包含支持的属性
+# Matrix Authentication Service配置
 matrixAuthenticationService:
   ingress:
     host: "$AUTH_HOST"
-    annotations:
-      cert-manager.io/cluster-issuer: "$issuer_name"
 
 # Matrix RTC配置
 matrixRTC:
   ingress:
     host: "$RTC_HOST"
-    annotations:
-      cert-manager.io/cluster-issuer: "$issuer_name"
 
 # Synapse配置
 synapse:
   ingress:
     host: "$SYNAPSE_HOST"
-    annotations:
-      cert-manager.io/cluster-issuer: "$issuer_name"
 
-# Well-known委托配置 - 移除不支持的host属性
+# Well-known委托配置
 wellKnownDelegation:
   enabled: true
-  ingress:
-    annotations:
-      cert-manager.io/cluster-issuer: "$issuer_name"
   additional:
     client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST:$HTTPS_PORT"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST:$HTTPS_PORT/","account":"https://$AUTH_HOST:$HTTPS_PORT/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST:$HTTPS_PORT"}]}'
     server: '{"m.server":"$SYNAPSE_HOST:$HTTPS_PORT"}'
