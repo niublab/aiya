@@ -657,12 +657,33 @@ labels:
   managed-by: "matrix-ess-deploy-script"
 
 # ==================== 证书管理器配置 ====================
+EOF
+
+# 根据是否使用外部反向代理决定证书配置
+if [[ "$HTTP_PORT" != "80" ]] || [[ "$HTTPS_PORT" != "443" ]]; then
+    # 外部反向代理模式 - 禁用ESS内部证书管理
+    cat >> "$values_file" << EOF
+# 外部反向代理模式 - 禁用内部证书和TLS
+ingress:
+  # 不使用cert-manager注解，避免重复申请证书
+  annotations: {}
+
+  # 禁用TLS，由外部Nginx处理
+  tlsEnabled: false
+
+  # 服务类型
+  service:
+    type: ClusterIP
+EOF
+else
+    # 标准模式 - 使用ESS内部证书管理
+    cat >> "$values_file" << EOF
+# 标准模式 - 使用ESS内部证书管理
 certManager:
   clusterIssuer: "letsencrypt-production"
 
-# ==================== Ingress全局配置 ====================
 ingress:
-  # 全局注解 - 自动TLS证书管理
+  # 使用cert-manager自动申请证书
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-production"
     traefik.ingress.kubernetes.io/router.tls: "true"
@@ -674,6 +695,10 @@ ingress:
   # 服务类型
   service:
     type: ClusterIP
+EOF
+fi
+
+cat >> "$values_file" << EOF
 
 # ==================== Element Web配置 ====================
 elementWeb:
@@ -979,14 +1004,14 @@ setup_external_reverse_proxy() {
     # 安装Nginx
     install_nginx_for_ess
 
-    # 生成ESS外部SSL配置
-    generate_ess_external_ssl_config
-
     # 生成Nginx配置
     generate_nginx_reverse_proxy_config
 
     # 配置Nginx
     configure_nginx_for_ess
+
+    print_info "外部反向代理配置完成"
+    print_warning "注意: ESS配置已自动调整为外部SSL模式 (tlsEnabled: false)"
 }
 
 install_nginx_for_ess() {
@@ -1023,27 +1048,7 @@ install_nginx_for_ess() {
     print_success "Nginx安装完成"
 }
 
-generate_ess_external_ssl_config() {
-    print_info "生成ESS外部SSL配置文件..."
 
-    local external_ssl_config="$INSTALL_DIR/ess-external-ssl.yaml"
-
-    cat > "$external_ssl_config" << EOF
-# ESS外部SSL配置 (官方推荐方式)
-# 当使用外部反向代理处理SSL时使用此配置
-# 参考: charts/matrix-stack/ci/fragments/quick-setup-external-cert.yaml
-
-# 禁用ESS内部TLS，由外部反向代理处理
-ingress:
-  tlsEnabled: false
-
-# 其他配置保持不变，ESS内部使用HTTP通信
-# Traefik将在8080端口提供HTTP服务给外部反向代理
-EOF
-
-    print_success "ESS外部SSL配置生成: $external_ssl_config"
-    print_info "此配置将禁用ESS内部TLS，由Nginx处理SSL终止"
-}
 
 generate_nginx_reverse_proxy_config() {
     print_info "生成Nginx反向代理配置 (ESS官方推荐)..."

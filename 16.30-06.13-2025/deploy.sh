@@ -536,7 +536,6 @@ main() {
     deploy_k3s
     deploy_helm
     deploy_cert_manager
-    generate_ess_values
     deploy_ess
     wait_for_pods
     create_admin_user
