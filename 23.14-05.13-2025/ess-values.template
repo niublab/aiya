@@ -1,0 +1,376 @@
+# ESS配置模板 - IP自动更新系统
+# 当前公网IP: {{PUBLIC_IP}}
+# 生成时间: {{TIMESTAMP}}
+# 配置版本: 1.0.0
+
+# ==================== 基础配置 ====================
+# Matrix服务器名称 (用户ID的域名部分)
+serverName: "{{DOMAIN}}"
+
+# 全局标签
+labels:
+  deployment: "ess-community"
+  ip-updater: "enabled"
+  public-ip: "{{PUBLIC_IP}}"
+  generated: "{{TIMESTAMP}}"
+
+# ==================== 网络配置 ====================
+# 公网IP配置
+publicIP: "{{PUBLIC_IP}}"
+externalIP: "{{PUBLIC_IP}}"
+
+# 全局Ingress配置 - 禁用TLS (由外部Nginx处理)
+ingress:
+  tlsEnabled: false
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-real-ip-cidr: "{{PUBLIC_IP}}/32"
+    nginx.ingress.kubernetes.io/use-forwarded-headers: "true"
+
+# ==================== Element Web配置 ====================
+elementWeb:
+  enabled: true
+  ingress:
+    host: "{{WEB_SUBDOMAIN}}.{{DOMAIN}}"
+    tlsEnabled: false
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: "{{MAX_UPLOAD_SIZE}}"
+  
+  # Element Web自定义配置
+  additional:
+    config.json: |
+      {
+        "default_server_config": {
+          "m.homeserver": {
+            "base_url": "https://{{MATRIX_SUBDOMAIN}}.{{DOMAIN}}:{{HTTPS_PORT}}",
+            "server_name": "{{DOMAIN}}"
+          },
+          "m.identity_server": {
+            "base_url": "https://vector.im"
+          }
+        },
+        "brand": "Matrix ESS Community",
+        "integrations_ui_url": "https://scalar.vector.im/",
+        "integrations_rest_url": "https://scalar.vector.im/api",
+        "integrations_widgets_urls": ["https://scalar.vector.im/_matrix/integrations/v1"],
+        "bug_report_endpoint_url": "https://element.io/bugreports/submit",
+        "default_theme": "light",
+        "room_directory": {
+          "servers": ["{{DOMAIN}}"]
+        },
+        "enable_presence_by_hs_url": {
+          "https://{{MATRIX_SUBDOMAIN}}.{{DOMAIN}}:{{HTTPS_PORT}}": false
+        },
+        "public_ip": "{{PUBLIC_IP}}"
+      }
+
+# ==================== Matrix Authentication Service配置 ====================
+matrixAuthenticationService:
+  enabled: true
+  ingress:
+    host: "{{AUTH_SUBDOMAIN}}.{{DOMAIN}}"
+    tlsEnabled: false
+  
+  # MAS自定义配置
+  additional:
+    config.yaml:
+      config: |
+        # MAS配置
+        http:
+          public_base: "https://{{AUTH_SUBDOMAIN}}.{{DOMAIN}}:{{HTTPS_PORT}}"
+          bind: "0.0.0.0:8080"
+        
+        matrix:
+          homeserver: "https://{{MATRIX_SUBDOMAIN}}.{{DOMAIN}}:{{HTTPS_PORT}}"
+          secret: "{{MAS_SECRET}}"
+        
+        # 外部IP配置
+        network:
+          public_ip: "{{PUBLIC_IP}}"
+          external_url: "https://{{AUTH_SUBDOMAIN}}.{{DOMAIN}}:{{HTTPS_PORT}}"
+
+# ==================== Matrix RTC配置 ====================
+matrixRTC:
+  enabled: true
+  ingress:
+    host: "{{RTC_SUBDOMAIN}}.{{DOMAIN}}"
+    tlsEnabled: false
+  
+  # SFU配置
+  sfu:
+    enabled: true
+    exposedServices:
+      rtcTcp:
+        enabled: true
+        portType: NodePort
+        port: {{WEBRTC_TCP_PORT}}
+      rtcMuxedUdp:
+        enabled: true
+        portType: NodePort
+        port: {{WEBRTC_UDP_PORT}}
+      rtcUdp:
+        enabled: false
+    
+    # LiveKit配置
+    config:
+      rtc:
+        # 外部IP配置 - 关键配置
+        external_ip: "{{PUBLIC_IP}}"
+        ice_servers:
+          - urls: 
+            - "stun:{{PUBLIC_IP}}:{{WEBRTC_UDP_PORT}}"
+            - "turn:{{PUBLIC_IP}}:{{WEBRTC_TCP_PORT}}"
+        
+        # UDP端口范围配置
+        port_range_start: {{WEBRTC_UDP_RANGE_START}}
+        port_range_end: {{WEBRTC_UDP_RANGE_END}}
+        
+        # TCP端口配置
+        tcp_port: {{WEBRTC_TCP_PORT}}
+        
+        # 网络配置
+        use_external_ip: true
+        advertise_ip: "{{PUBLIC_IP}}"
+    
+    # 额外配置
+    additional: |
+      # LiveKit自定义配置
+      port: 7880
+      bind_addresses:
+        - "0.0.0.0"
+      
+      # WebRTC配置
+      rtc:
+        tcp_port: {{WEBRTC_TCP_PORT}}
+        port_range_start: {{WEBRTC_UDP_RANGE_START}}
+        port_range_end: {{WEBRTC_UDP_RANGE_END}}
+        use_external_ip: true
+        external_ip: "{{PUBLIC_IP}}"
+      
+      # 日志配置
+      logging:
+        level: info
+        pion_level: warn
+      
+      # 开发配置
+      development: false
+
+# ==================== Synapse配置 ====================
+synapse:
+  enabled: true
+  ingress:
+    host: "{{MATRIX_SUBDOMAIN}}.{{DOMAIN}}"
+    tlsEnabled: false
+  
+  # Synapse自定义配置
+  additional:
+    homeserver.yaml:
+      config: |
+        # 服务器配置
+        server_name: "{{DOMAIN}}"
+        public_baseurl: "https://{{MATRIX_SUBDOMAIN}}.{{DOMAIN}}:{{HTTPS_PORT}}"
+        
+        # 网络配置
+        bind_addresses:
+          - "0.0.0.0"
+        
+        # 联邦配置
+        federation_domain_whitelist: []
+        federation_ip_range_blacklist:
+          - '127.0.0.0/8'
+          - '10.0.0.0/8'
+          - '172.16.0.0/12'
+          - '192.168.0.0/16'
+          - '100.64.0.0/10'
+          - '169.254.0.0/16'
+          - '::1/128'
+          - 'fe80::/64'
+          - 'fc00::/7'
+        
+        # 外部IP配置
+        public_ip: "{{PUBLIC_IP}}"
+        
+        # 媒体配置
+        max_upload_size: "{{MAX_UPLOAD_SIZE}}"
+        
+        # 日志配置
+        log_config: "/data/{{DOMAIN}}.log.config"
+
+# ==================== Well-known配置 ====================
+wellKnownDelegation:
+  enabled: true
+  ingress:
+    host: "{{DOMAIN}}"
+    tlsEnabled: false
+  
+  # Well-known自定义配置
+  additional:
+    server: |
+      {
+        "m.server": "{{MATRIX_SUBDOMAIN}}.{{DOMAIN}}:{{FEDERATION_PORT}}"
+      }
+    
+    client: |
+      {
+        "m.homeserver": {
+          "base_url": "https://{{MATRIX_SUBDOMAIN}}.{{DOMAIN}}:{{HTTPS_PORT}}"
+        },
+        "m.identity_server": {
+          "base_url": "https://vector.im"
+        },
+        "org.matrix.msc3575.proxy": {
+          "url": "https://{{RTC_SUBDOMAIN}}.{{DOMAIN}}:{{HTTPS_PORT}}"
+        }
+      }
+    
+    element: |
+      {
+        "call": {
+          "widget_url": "https://call.element.io"
+        },
+        "public_ip": "{{PUBLIC_IP}}"
+      }
+
+# ==================== 数据库配置 ====================
+{{#USE_EXTERNAL_DB}}
+# 外部PostgreSQL配置
+postgresql:
+  enabled: false
+
+synapse:
+  postgres:
+    host: "{{POSTGRES_HOST}}"
+    port: {{POSTGRES_PORT}}
+    database: "{{POSTGRES_DB_SYNAPSE}}"
+    username: "{{POSTGRES_USER_SYNAPSE}}"
+    password:
+      secret: "postgres-secret"
+      secretKey: "synapse-password"
+
+matrixAuthenticationService:
+  postgres:
+    host: "{{POSTGRES_HOST}}"
+    port: {{POSTGRES_PORT}}
+    database: "{{POSTGRES_DB_MAS}}"
+    username: "{{POSTGRES_USER_MAS}}"
+    password:
+      secret: "postgres-secret"
+      secretKey: "mas-password"
+{{/USE_EXTERNAL_DB}}
+
+{{^USE_EXTERNAL_DB}}
+# 内置PostgreSQL配置
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "{{POSTGRES_PASSWORD}}"
+    database: "synapse"
+  primary:
+    persistence:
+      enabled: true
+      size: "{{POSTGRES_STORAGE_SIZE}}"
+{{/USE_EXTERNAL_DB}}
+
+# ==================== 资源配置 ====================
+# Synapse资源限制
+synapse:
+  resources:
+    requests:
+      memory: "{{SYNAPSE_MEMORY_REQUEST}}"
+      cpu: "{{SYNAPSE_CPU_REQUEST}}"
+    limits:
+      memory: "{{SYNAPSE_MEMORY_LIMIT}}"
+      cpu: "{{SYNAPSE_CPU_LIMIT}}"
+
+# Element Web资源限制
+elementWeb:
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "128Mi"
+      cpu: "100m"
+
+# MAS资源限制
+matrixAuthenticationService:
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+
+# Matrix RTC资源限制
+matrixRTC:
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# ==================== 监控配置 ====================
+{{#ENABLE_MONITORING}}
+# 启用ServiceMonitor
+synapse:
+  serviceMonitors:
+    enabled: true
+
+matrixRTC:
+  serviceMonitors:
+    enabled: true
+{{/ENABLE_MONITORING}}
+
+# ==================== 安全配置 ====================
+# 全局安全配置
+labels:
+  security.ip-updater/public-ip: "{{PUBLIC_IP}}"
+  security.ip-updater/last-update: "{{TIMESTAMP}}"
+
+# Pod安全上下文
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10010
+  runAsGroup: 10010
+  fsGroup: 10010
+
+# 容器安全上下文
+containersSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# ==================== 配置文件信息 ====================
+# 模板版本: 1.0.0
+# 生成时间: {{TIMESTAMP}}
+# 公网IP: {{PUBLIC_IP}}
+# 域名: {{DOMAIN}}
+# HTTP端口: {{HTTP_PORT}}
+# HTTPS端口: {{HTTPS_PORT}}
+# 联邦端口: {{FEDERATION_PORT}}
+# WebRTC TCP端口: {{WEBRTC_TCP_PORT}}
+# WebRTC UDP端口: {{WEBRTC_UDP_PORT}}
+# WebRTC UDP范围: {{WEBRTC_UDP_RANGE_START}}-{{WEBRTC_UDP_RANGE_END}}
+# 
+# 变量说明:
+# {{PUBLIC_IP}} - 当前公网IP地址
+# {{DOMAIN}} - 主域名
+# {{WEB_SUBDOMAIN}} - Web客户端子域名
+# {{AUTH_SUBDOMAIN}} - 认证服务子域名
+# {{RTC_SUBDOMAIN}} - RTC服务子域名
+# {{MATRIX_SUBDOMAIN}} - Matrix服务器子域名
+# {{HTTP_PORT}} - HTTP端口
+# {{HTTPS_PORT}} - HTTPS端口
+# {{FEDERATION_PORT}} - Matrix联邦端口
+# {{WEBRTC_TCP_PORT}} - WebRTC TCP端口
+# {{WEBRTC_UDP_PORT}} - WebRTC UDP端口
+# {{WEBRTC_UDP_RANGE_START}} - WebRTC UDP范围开始
+# {{WEBRTC_UDP_RANGE_END}} - WebRTC UDP范围结束
+# {{MAX_UPLOAD_SIZE}} - 最大上传文件大小
+# {{TIMESTAMP}} - 生成时间戳

@@ -1,0 +1,58 @@
+[Unit]
+Description=IP Address Auto Update Service
+Documentation=https://github.com/your-repo/ip-updater
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/ip-updater/bin/ip-update.sh
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/opt/ip-updater/bin/ip-update.sh --update
+ExecStartPre=/opt/ip-updater/bin/ip-update.sh --check-config
+
+# 工作目录
+WorkingDirectory=/opt/ip-updater
+
+# 环境变量
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=LANG=en_US.UTF-8
+Environment=TZ=Asia/Shanghai
+
+# 安全设置
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ip-updater /etc/nginx /opt/matrix-ess /var/log
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+# 资源限制
+MemoryMax=256M
+CPUQuota=50%
+TasksMax=10
+
+# 超时设置
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# 重启策略
+Restart=no
+RestartSec=10
+
+# 日志设置
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ip-update
+
+# 成功退出码
+SuccessExitStatus=0
+
+[Install]
+WantedBy=multi-user.target

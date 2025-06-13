@@ -1,0 +1,36 @@
+[Unit]
+Description=IP Address Auto Update Timer
+Documentation=https://github.com/your-repo/ip-updater
+Requires=ip-update.service
+
+[Timer]
+# 定时器配置
+
+# 启动后延迟 (避免系统启动时立即执行)
+OnBootSec=2min
+
+# 定期执行间隔 (默认5分钟)
+OnUnitActiveSec=5min
+
+# 基于日历的定时 (可选，注释掉OnUnitActiveSec使用此配置)
+# OnCalendar=*:0/5  # 每5分钟执行一次
+# OnCalendar=*:0,15,30,45  # 每15分钟执行一次
+# OnCalendar=hourly  # 每小时执行一次
+
+# 随机延迟 (避免多个服务同时执行)
+RandomizedDelaySec=30sec
+
+# 持久化 (系统关机期间错过的任务会在启动后执行)
+Persistent=true
+
+# 精确度 (定时器精确度，降低可以节省电源)
+AccuracySec=1min
+
+# 唤醒系统 (是否唤醒休眠的系统)
+WakeSystem=false
+
+# 保持运行 (定时器是否保持系统运行)
+RemainAfterElapse=true
+
+[Install]
+WantedBy=timers.target
