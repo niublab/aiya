@@ -248,10 +248,84 @@ configure_environment() {
                     export HTTPS_PORT="${user_https_port:-8443}"
                 fi
 
+                # 询问证书验证方式
+                echo
+                log "INFO" "选择SSL证书验证方式:"
+                echo "  1) DNS验证 (推荐，无需开放80端口)"
+                echo "  2) HTTP验证 (需要80端口可访问)"
+                echo
+                read -p "请选择 [1-2]: " cert_challenge_choice
+
+                case "$cert_challenge_choice" in
+                    "1")
+                        export CERT_CHALLENGE="dns"
+                        log "INFO" "已选择DNS验证"
+
+                        # 询问DNS提供商
+                        echo
+                        log "INFO" "选择DNS提供商:"
+                        echo "  1) Cloudflare (推荐)"
+                        echo "  2) AWS Route53"
+                        echo "  3) DigitalOcean"
+                        echo
+                        read -p "请选择 [1-3]: " dns_provider_choice
+
+                        case "$dns_provider_choice" in
+                            "1")
+                                export DNS_PROVIDER="cloudflare"
+                                log "INFO" "已选择Cloudflare DNS"
+
+                                if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+                                    echo
+                                    log "WARNING" "需要Cloudflare API Token"
+                                    log "INFO" "获取地址: https://dash.cloudflare.com/profile/api-tokens"
+                                    log "INFO" "权限需要: Zone:Zone:Read, Zone:DNS:Edit"
+                                    read -p "请输入Cloudflare API Token: " cf_token
+                                    if [[ -n "$cf_token" ]]; then
+                                        export CLOUDFLARE_API_TOKEN="$cf_token"
+                                        log "SUCCESS" "Cloudflare API Token已设置"
+                                    else
+                                        log "ERROR" "API Token不能为空"
+                                        exit 1
+                                    fi
+                                fi
+                                ;;
+                            "2")
+                                export DNS_PROVIDER="route53"
+                                log "INFO" "已选择AWS Route53"
+                                log "WARNING" "请确保已配置AWS凭据"
+                                ;;
+                            "3")
+                                export DNS_PROVIDER="digitalocean"
+                                log "INFO" "已选择DigitalOcean"
+                                log "WARNING" "请确保已设置DO_API_TOKEN环境变量"
+                                ;;
+                            *)
+                                log "WARNING" "无效选择，使用默认Cloudflare"
+                                export DNS_PROVIDER="cloudflare"
+                                ;;
+                        esac
+                        ;;
+                    "2")
+                        export CERT_CHALLENGE="http"
+                        log "INFO" "已选择HTTP验证"
+                        log "WARNING" "请确保80端口可以从互联网访问"
+                        ;;
+                    *)
+                        log "WARNING" "无效选择，使用默认DNS验证"
+                        export CERT_CHALLENGE="dns"
+                        export DNS_PROVIDER="cloudflare"
+                        ;;
+                esac
+
                 log "SUCCESS" "环境变量配置完成"
                 log "INFO" "域名: $DOMAIN"
                 log "INFO" "HTTP端口: $HTTP_PORT"
                 log "INFO" "HTTPS端口: $HTTPS_PORT"
+                log "INFO" "证书验证: $CERT_CHALLENGE"
+                if [[ "$CERT_CHALLENGE" == "dns" ]]; then
+                    log "INFO" "DNS提供商: $DNS_PROVIDER"
+                fi
             fi
         fi
     fi
@@ -491,6 +565,9 @@ show_help() {
     echo "  HTTP_PORT=8080              # HTTP端口"
     echo "  HTTPS_PORT=8443             # HTTPS端口"
     echo "  FEDERATION_PORT=8448        # Matrix联邦端口"
+    echo "  CERT_CHALLENGE=dns          # 证书验证方式 (dns|http)"
+    echo "  DNS_PROVIDER=cloudflare     # DNS提供商"
+    echo "  CLOUDFLARE_API_TOKEN=xxx    # Cloudflare API Token"
     echo "  TEST_MODE=true              # 启用测试模式"
     echo "  CERT_TYPE=self-signed       # 证书类型"
     echo "  DEBUG=true                  # 启用调试模式"
@@ -507,10 +584,17 @@ show_help() {
     echo "  DOMAIN=your-domain.com AUTO_DEPLOY=3 bash <(curl -fsSL $REPO_URL/setup.sh)"
     echo
     echo -e "${CYAN}完整示例:${NC}"
-    echo "  # 生产环境完整部署"
+    echo "  # 生产环境完整部署 (DNS验证)"
     echo "  DOMAIN=matrix.example.com \\"
-    echo "  HTTP_PORT=8080 \\"
-    echo "  HTTPS_PORT=8443 \\"
+    echo "  CERT_CHALLENGE=dns \\"
+    echo "  DNS_PROVIDER=cloudflare \\"
+    echo "  CLOUDFLARE_API_TOKEN=your_token \\"
+    echo "  AUTO_DEPLOY=3 \\"
+    echo "  bash <(curl -fsSL $REPO_URL/setup.sh)"
+    echo
+    echo "  # HTTP验证方式 (需要80端口)"
+    echo "  DOMAIN=matrix.example.com \\"
+    echo "  CERT_CHALLENGE=http \\"
     echo "  AUTO_DEPLOY=3 \\"
     echo "  bash <(curl -fsSL $REPO_URL/setup.sh)"
     echo

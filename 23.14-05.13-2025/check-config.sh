@@ -140,10 +140,64 @@ check_certificate() {
 
     local cert_type="${CERT_TYPE:-letsencrypt}"
     local test_mode="${TEST_MODE:-false}"
+    local cert_challenge="${CERT_CHALLENGE:-dns}"
+    local dns_provider="${DNS_PROVIDER:-cloudflare}"
 
     if [[ "$test_mode" == "true" ]]; then
         print_warning "测试模式已启用"
         cert_type="letsencrypt-staging"
+    fi
+
+    # 检查证书验证方式
+    print_info "证书验证方式: $cert_challenge"
+
+    if [[ "$cert_challenge" == "dns" ]]; then
+        print_success "使用DNS验证 (推荐)"
+        print_info "DNS提供商: $dns_provider"
+
+        # 检查DNS提供商配置
+        case "$dns_provider" in
+            "cloudflare")
+                if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+                    print_error "Cloudflare API Token未设置"
+                    print_info "请设置: CLOUDFLARE_API_TOKEN=your_token"
+                    print_info "获取地址: https://dash.cloudflare.com/profile/api-tokens"
+                    print_info "权限需要: Zone:Zone:Read, Zone:DNS:Edit"
+                    return 1
+                else
+                    print_success "Cloudflare API Token已设置"
+                fi
+                ;;
+            "route53")
+                if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+                    print_error "AWS凭据未设置"
+                    print_info "请设置: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY"
+                    return 1
+                else
+                    print_success "AWS Route53凭据已设置"
+                fi
+                ;;
+            "digitalocean")
+                if [[ -z "${DO_API_TOKEN:-}" ]]; then
+                    print_error "DigitalOcean API Token未设置"
+                    print_info "请设置: DO_API_TOKEN=your_token"
+                    return 1
+                else
+                    print_success "DigitalOcean API Token已设置"
+                fi
+                ;;
+            *)
+                print_warning "未知的DNS提供商: $dns_provider"
+                ;;
+        esac
+    elif [[ "$cert_challenge" == "http" ]]; then
+        print_warning "使用HTTP验证"
+        print_warning "需要确保80端口可以从互联网访问"
+        print_info "如果服务器在防火墙后，建议使用DNS验证"
+    else
+        print_error "不支持的证书验证方式: $cert_challenge"
+        print_info "支持的方式: dns, http"
+        return 1
     fi
 
     case "$cert_type" in

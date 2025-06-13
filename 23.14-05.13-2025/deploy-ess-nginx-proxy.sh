@@ -234,10 +234,112 @@ generate_ssl_certificates() {
     print_success "SSL证书配置完成"
 }
 
+# 安装DNS验证插件
+install_dns_plugins() {
+    local dns_provider="${DNS_PROVIDER:-cloudflare}"
+
+    print_info "安装DNS验证插件: $dns_provider"
+
+    case "$dns_provider" in
+        "cloudflare")
+            if command -v apt &> /dev/null; then
+                apt update
+                apt install -y python3-certbot-dns-cloudflare
+            elif command -v yum &> /dev/null; then
+                yum install -y python3-certbot-dns-cloudflare
+            else
+                print_error "不支持的包管理器"
+                exit 1
+            fi
+            ;;
+        "route53")
+            if command -v apt &> /dev/null; then
+                apt install -y python3-certbot-dns-route53
+            elif command -v yum &> /dev/null; then
+                yum install -y python3-certbot-dns-route53
+            fi
+            ;;
+        "digitalocean")
+            if command -v apt &> /dev/null; then
+                apt install -y python3-certbot-dns-digitalocean
+            elif command -v yum &> /dev/null; then
+                yum install -y python3-certbot-dns-digitalocean
+            fi
+            ;;
+        *)
+            print_warning "未知的DNS提供商: $dns_provider，跳过插件安装"
+            ;;
+    esac
+
+    print_success "DNS验证插件安装完成"
+}
+
+# 配置DNS验证凭据
+setup_dns_credentials() {
+    local dns_provider="${DNS_PROVIDER:-cloudflare}"
+    local creds_dir="/etc/letsencrypt"
+
+    print_info "配置DNS验证凭据..."
+
+    mkdir -p "$creds_dir"
+
+    case "$dns_provider" in
+        "cloudflare")
+            if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+                print_error "Cloudflare API Token未设置"
+                print_info "请设置环境变量: CLOUDFLARE_API_TOKEN"
+                print_info "获取Token: https://dash.cloudflare.com/profile/api-tokens"
+                print_info "权限需要: Zone:Zone:Read, Zone:DNS:Edit"
+                exit 1
+            fi
+
+            cat > "$creds_dir/cloudflare.ini" << EOF
+# Cloudflare API Token
+dns_cloudflare_api_token = $CLOUDFLARE_API_TOKEN
+EOF
+            chmod 600 "$creds_dir/cloudflare.ini"
+            print_success "Cloudflare凭据配置完成"
+            ;;
+        "route53")
+            if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+                print_error "AWS凭据未设置"
+                print_info "请设置: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY"
+                exit 1
+            fi
+
+            cat > "$creds_dir/route53.ini" << EOF
+[default]
+aws_access_key_id = $AWS_ACCESS_KEY_ID
+aws_secret_access_key = $AWS_SECRET_ACCESS_KEY
+EOF
+            chmod 600 "$creds_dir/route53.ini"
+            print_success "Route53凭据配置完成"
+            ;;
+        "digitalocean")
+            if [[ -z "${DO_API_TOKEN:-}" ]]; then
+                print_error "DigitalOcean API Token未设置"
+                print_info "请设置环境变量: DO_API_TOKEN"
+                exit 1
+            fi
+
+            cat > "$creds_dir/digitalocean.ini" << EOF
+dns_digitalocean_token = $DO_API_TOKEN
+EOF
+            chmod 600 "$creds_dir/digitalocean.ini"
+            print_success "DigitalOcean凭据配置完成"
+            ;;
+        *)
+            print_warning "未知的DNS提供商: $dns_provider"
+            ;;
+    esac
+}
+
 # 生成Let's Encrypt证书
 generate_letsencrypt_cert() {
     local email="$1"
     local staging_flag="$2"
+    local challenge="${CERT_CHALLENGE:-dns}"
+    local dns_provider="${DNS_PROVIDER:-cloudflare}"
 
     if [[ -n "$staging_flag" ]]; then
         print_info "生成Let's Encrypt Staging证书..."
@@ -245,29 +347,98 @@ generate_letsencrypt_cert() {
         print_info "生成Let's Encrypt生产证书..."
     fi
 
-    # 停止nginx以释放80端口
-    systemctl stop nginx || true
+    # 根据验证方式选择不同的处理
+    if [[ "$challenge" == "dns" ]]; then
+        # DNS验证
+        print_info "使用DNS验证方式: $dns_provider"
 
-    # 生成证书
-    local certbot_cmd="certbot certonly --standalone --agree-tos --no-eff-email"
-    certbot_cmd="$certbot_cmd --email \"$email\""
-    certbot_cmd="$certbot_cmd -d \"$DOMAIN\""
-    certbot_cmd="$certbot_cmd -d \"app.$DOMAIN\""
-    certbot_cmd="$certbot_cmd -d \"mas.$DOMAIN\""
-    certbot_cmd="$certbot_cmd -d \"rtc.$DOMAIN\""
-    certbot_cmd="$certbot_cmd -d \"matrix.$DOMAIN\""
+        # 安装DNS插件
+        install_dns_plugins
 
-    if [[ -n "$staging_flag" ]]; then
-        certbot_cmd="$certbot_cmd $staging_flag"
+        # 配置DNS凭据
+        setup_dns_credentials
+
+        # 构建certbot命令
+        local certbot_cmd="certbot certonly --agree-tos --no-eff-email"
+        certbot_cmd="$certbot_cmd --email \"$email\""
+        certbot_cmd="$certbot_cmd -d \"$DOMAIN\""
+        certbot_cmd="$certbot_cmd -d \"app.$DOMAIN\""
+        certbot_cmd="$certbot_cmd -d \"mas.$DOMAIN\""
+        certbot_cmd="$certbot_cmd -d \"rtc.$DOMAIN\""
+        certbot_cmd="$certbot_cmd -d \"matrix.$DOMAIN\""
+
+        # 添加DNS插件参数
+        case "$dns_provider" in
+            "cloudflare")
+                certbot_cmd="$certbot_cmd --dns-cloudflare"
+                certbot_cmd="$certbot_cmd --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini"
+                ;;
+            "route53")
+                certbot_cmd="$certbot_cmd --dns-route53"
+                certbot_cmd="$certbot_cmd --dns-route53-credentials /etc/letsencrypt/route53.ini"
+                ;;
+            "digitalocean")
+                certbot_cmd="$certbot_cmd --dns-digitalocean"
+                certbot_cmd="$certbot_cmd --dns-digitalocean-credentials /etc/letsencrypt/digitalocean.ini"
+                ;;
+            *)
+                print_error "不支持的DNS提供商: $dns_provider"
+                exit 1
+                ;;
+        esac
+
+        if [[ -n "$staging_flag" ]]; then
+            certbot_cmd="$certbot_cmd $staging_flag"
+        fi
+
+        print_info "执行DNS验证..."
+        print_info "这可能需要几分钟时间等待DNS传播..."
+
+    else
+        # HTTP验证 (原有方式)
+        print_info "使用HTTP验证方式"
+        print_warning "需要确保80端口可以从互联网访问"
+
+        # 停止nginx以释放80端口
+        systemctl stop nginx || true
+
+        # 构建certbot命令
+        local certbot_cmd="certbot certonly --standalone --agree-tos --no-eff-email"
+        certbot_cmd="$certbot_cmd --email \"$email\""
+        certbot_cmd="$certbot_cmd -d \"$DOMAIN\""
+        certbot_cmd="$certbot_cmd -d \"app.$DOMAIN\""
+        certbot_cmd="$certbot_cmd -d \"mas.$DOMAIN\""
+        certbot_cmd="$certbot_cmd -d \"rtc.$DOMAIN\""
+        certbot_cmd="$certbot_cmd -d \"matrix.$DOMAIN\""
+
+        if [[ -n "$staging_flag" ]]; then
+            certbot_cmd="$certbot_cmd $staging_flag"
+        fi
     fi
 
+    # 执行证书生成
     if eval "$certbot_cmd"; then
         print_success "Let's Encrypt证书生成成功"
         if [[ -n "$staging_flag" ]]; then
             print_warning "注意: 这是测试证书，浏览器会显示不安全警告"
         fi
+
+        # 显示证书信息
+        print_info "证书信息:"
+        openssl x509 -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" -text -noout | grep -E "(Subject:|DNS:|Not After)"
+
     else
         print_error "Let's Encrypt证书生成失败"
+        print_info "请检查:"
+        if [[ "$challenge" == "dns" ]]; then
+            print_info "1. DNS API凭据是否正确"
+            print_info "2. API Token权限是否足够"
+            print_info "3. 域名是否在DNS提供商管理"
+        else
+            print_info "1. 域名是否正确解析到此服务器"
+            print_info "2. 80端口是否可以从互联网访问"
+            print_info "3. 防火墙是否阻止了连接"
+        fi
         exit 1
     fi
 }
