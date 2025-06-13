@@ -729,12 +729,12 @@ wellKnownDelegation:
   # 主域名重定向到Element Web
   baseDomainRedirect:
     enabled: true
-    url: "https://$WEB_HOST:$HTTPS_PORT"
+    url: "https://$WEB_HOST"
 
-  # 基于官方规范的配置，使用自定义端口
+  # 基于官方规范的配置
   additional:
-    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST:$HTTPS_PORT"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST:$HTTPS_PORT/","account":"https://$AUTH_HOST:$HTTPS_PORT/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST:$HTTPS_PORT"}]}'
-    server: '{"m.server":"$SYNAPSE_HOST:$HTTPS_PORT"}'
+    client: '{"m.homeserver":{"base_url":"https://$SYNAPSE_HOST"},"org.matrix.msc2965.authentication":{"issuer":"https://$AUTH_HOST/","account":"https://$AUTH_HOST/account"},"org.matrix.msc4143.rtc_foci":[{"type":"livekit","livekit_service_url":"https://$RTC_HOST"}]}'
+    server: '{"m.server":"$SYNAPSE_HOST:443"}'
 EOF
 
     print_success "ESS配置文件已生成: $values_file"
