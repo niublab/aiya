@@ -432,8 +432,27 @@ show_config_details() {
         return 1
     fi
 
-    # 安全加载配置文件，忽略readonly变量错误
-    source "$CONFIG_FILE" 2>/dev/null || true
+    # 安全加载配置文件，完全忽略所有错误和警告
+    {
+        source "$CONFIG_FILE"
+    } 2>/dev/null || {
+        # 如果source失败，手动提取关键配置
+        print_warning "配置文件加载有问题，尝试手动解析..."
+        MAIN_DOMAIN=$(grep "^MAIN_DOMAIN=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        SERVER_NAME=$(grep "^SERVER_NAME=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        WEB_HOST=$(grep "^WEB_HOST=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        AUTH_HOST=$(grep "^AUTH_HOST=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        RTC_HOST=$(grep "^RTC_HOST=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        SYNAPSE_HOST=$(grep "^SYNAPSE_HOST=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        INSTALL_DIR=$(grep "^INSTALL_DIR=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        HTTP_PORT=$(grep "^HTTP_PORT=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        HTTPS_PORT=$(grep "^HTTPS_PORT=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        FEDERATION_PORT=$(grep "^FEDERATION_PORT=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        WEBRTC_TCP_PORT=$(grep "^WEBRTC_TCP_PORT=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        IP_METHOD=$(grep "^IP_METHOD=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        ADMIN_USERNAME=$(grep "^ADMIN_USERNAME=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        CERT_EMAIL=$(grep "^CERT_EMAIL=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+    }
 
     print_step "当前配置详情"
 

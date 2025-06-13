@@ -45,8 +45,10 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     exit 1
 fi
 
-# 加载配置
-source "$CONFIG_FILE"
+# 安全加载配置，忽略readonly变量错误
+source "$CONFIG_FILE" 2>/dev/null || {
+    print_warning "配置文件加载有警告，但继续执行部署"
+}
 
 print_step "Matrix ESS Community 自动部署"
 print_info "基于配置文件: $CONFIG_FILE"
