@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ==================== 全局变量和配置 ====================
 
-readonly SCRIPT_VERSION="3.1.2"
+readonly SCRIPT_VERSION="3.2.0"
 readonly SCRIPT_NAME="Matrix ESS Community 自动部署脚本"
 readonly SCRIPT_DATE="2025-01-28"
 
@@ -1504,13 +1504,8 @@ deploy_ess() {
     print_info "部署Element Server Suite (使用OCI registry)..."
     local helm_cmd="helm install ess $oci_chart --namespace $namespace --values $values_file --timeout=300s"
 
-    # 尝试使用指定版本
-    if helm show chart "$oci_chart" --version "$ESS_VERSION" &> /dev/null; then
-        helm_cmd="$helm_cmd --version $ESS_VERSION"
-        print_info "使用指定版本: $ESS_VERSION"
-    else
-        print_warning "指定版本 $ESS_VERSION 不可用，使用最新版本"
-    fi
+    # 使用最新版本，不指定版本号
+    print_info "使用最新版本"
 
     print_info "执行部署命令: $helm_cmd"
     if ! eval "$helm_cmd"; then
