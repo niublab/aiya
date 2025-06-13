@@ -245,12 +245,53 @@ collect_config() {
     echo
 
     if ! confirm "是否使用这些自动生成的域名" "y"; then
-        print_info "请手动输入域名:"
-        read -p "Element Web域名: " WEB_HOST
-        read -p "认证服务域名: " AUTH_HOST
-        read -p "RTC服务域名: " RTC_HOST
-        read -p "Matrix服务器名称 (用户ID域名): " SERVER_NAME
-        read -p "Synapse访问域名: " SYNAPSE_HOST
+        print_info "请手动输入域名 (可输入完整域名或仅子域名前缀):"
+
+        read -p "Element Web域名 [如: app 或 app.$MAIN_DOMAIN]: " input_web
+        read -p "认证服务域名 [如: mas 或 mas.$MAIN_DOMAIN]: " input_auth
+        read -p "RTC服务域名 [如: rtc 或 rtc.$MAIN_DOMAIN]: " input_rtc
+        read -p "Matrix服务器名称 (用户ID域名) [如: $MAIN_DOMAIN]: " input_server
+        read -p "Synapse访问域名 [如: matrix 或 matrix.$MAIN_DOMAIN]: " input_synapse
+
+        # 智能补全域名：如果输入不包含点号，则自动添加主域名
+        if [[ "$input_web" == *.* ]]; then
+            WEB_HOST="$input_web"
+        else
+            WEB_HOST="$input_web.$MAIN_DOMAIN"
+        fi
+
+        if [[ "$input_auth" == *.* ]]; then
+            AUTH_HOST="$input_auth"
+        else
+            AUTH_HOST="$input_auth.$MAIN_DOMAIN"
+        fi
+
+        if [[ "$input_rtc" == *.* ]]; then
+            RTC_HOST="$input_rtc"
+        else
+            RTC_HOST="$input_rtc.$MAIN_DOMAIN"
+        fi
+
+        if [[ "$input_server" == *.* ]]; then
+            SERVER_NAME="$input_server"
+        else
+            SERVER_NAME="$input_server.$MAIN_DOMAIN"
+        fi
+
+        if [[ "$input_synapse" == *.* ]]; then
+            SYNAPSE_HOST="$input_synapse"
+        else
+            SYNAPSE_HOST="$input_synapse.$MAIN_DOMAIN"
+        fi
+
+        # 显示最终的域名配置
+        print_info "最终域名配置:"
+        echo "  Element Web: $WEB_HOST"
+        echo "  认证服务: $AUTH_HOST"
+        echo "  RTC服务: $RTC_HOST"
+        echo "  Matrix服务器: $SERVER_NAME (用户ID: @username:$SERVER_NAME)"
+        echo "  Synapse访问: $SYNAPSE_HOST"
+        echo
     fi
 
     # 端口配置 - 完全动态
