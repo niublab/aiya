@@ -910,11 +910,17 @@ main() {
                     # 调用部署脚本
                     local deploy_script="$SCRIPT_DIR/deploy.sh"
                     print_info "检查部署脚本: $deploy_script"
+                    print_info "当前脚本目录: $SCRIPT_DIR"
+                    print_info "当前工作目录: $(pwd)"
 
                     if [[ -f "$deploy_script" ]]; then
                         print_success "找到部署脚本，开始自动部署..."
                         chmod +x "$deploy_script"
-                        "$deploy_script"
+
+                        # 切换到脚本目录执行，确保路径正确
+                        print_info "切换到脚本目录执行部署..."
+                        cd "$SCRIPT_DIR"
+                        ./deploy.sh
                     else
                         print_warning "未找到部署脚本: $deploy_script"
                         print_info "配置文件已生成，请手动部署:"
@@ -923,6 +929,10 @@ main() {
                         print_info ""
                         print_info "手动部署命令:"
                         print_info "cd $SCRIPT_DIR && ./deploy.sh"
+
+                        # 显示目录内容帮助调试
+                        print_info "脚本目录内容:"
+                        ls -la "$SCRIPT_DIR"/ | grep -E "\.(sh|yaml|env)$" || echo "  未找到相关文件"
                     fi
                 fi
                 read -p "按回车键继续..."
