@@ -188,25 +188,94 @@ show_menu() {
     echo
 }
 
+# 配置环境变量
+configure_environment() {
+    log "STEP" "配置环境变量..."
+
+    # 检查是否已有环境变量
+    if [[ -n "${DOMAIN:-}" && "$DOMAIN" != "your-domain.com" ]]; then
+        log "INFO" "检测到环境变量 DOMAIN=$DOMAIN"
+        return 0
+    fi
+
+    # 检查配置文件
+    if [[ -f "ess-config-template.env" ]]; then
+        log "INFO" "发现配置模板文件"
+        log "INFO" "配置文件: $TEMP_DIR/ess-config-template.env"
+
+        # 在自动部署模式下，如果没有设置域名，则提示用户
+        if [[ -n "${AUTO_DEPLOY:-}" ]]; then
+            if [[ -z "${DOMAIN:-}" || "$DOMAIN" == "your-domain.com" ]]; then
+                log "ERROR" "自动部署模式需要设置 DOMAIN 环境变量"
+                log "INFO" "请使用: DOMAIN=your-actual-domain.com AUTO_DEPLOY=3 bash <(curl -fsSL ...)"
+                log "INFO" "或者先设置环境变量:"
+                log "INFO" "  export DOMAIN=your-actual-domain.com"
+                log "INFO" "  export HTTP_PORT=8080"
+                log "INFO" "  export HTTPS_PORT=8443"
+                exit 1
+            fi
+        else
+            # 交互模式
+            read -p "是否现在编辑配置文件? (y/N): " edit_config
+            if [[ "$edit_config" =~ ^[Yy]$ ]]; then
+                ${EDITOR:-nano} ess-config-template.env
+                source ess-config-template.env
+            else
+                # 提示用户手动设置关键变量
+                log "INFO" "请设置关键环境变量:"
+
+                if [[ -z "${DOMAIN:-}" || "$DOMAIN" == "your-domain.com" ]]; then
+                    read -p "请输入您的域名 (例如: example.com): " user_domain
+                    if [[ -n "$user_domain" ]]; then
+                        export DOMAIN="$user_domain"
+                        log "SUCCESS" "域名设置为: $DOMAIN"
+                    else
+                        log "ERROR" "域名不能为空"
+                        exit 1
+                    fi
+                fi
+
+                if [[ -z "${HTTP_PORT:-}" ]]; then
+                    read -p "HTTP端口 [8080]: " user_http_port
+                    export HTTP_PORT="${user_http_port:-8080}"
+                fi
+
+                if [[ -z "${HTTPS_PORT:-}" ]]; then
+                    read -p "HTTPS端口 [8443]: " user_https_port
+                    export HTTPS_PORT="${user_https_port:-8443}"
+                fi
+
+                log "SUCCESS" "环境变量配置完成"
+                log "INFO" "域名: $DOMAIN"
+                log "INFO" "HTTP端口: $HTTP_PORT"
+                log "INFO" "HTTPS端口: $HTTPS_PORT"
+            fi
+        fi
+    fi
+}
+
 # 部署ESS-Helm方案
 deploy_ess() {
     log "STEP" "部署ESS-Helm外部Nginx反代方案..."
-    
+
+    # 配置环境变量
+    configure_environment
+
     # 设置执行权限
     chmod +x deploy-ess-nginx-proxy.sh
-    
-    # 检查配置文件
-    if [[ -f "ess-config-template.env" ]]; then
-        log "INFO" "发现配置模板文件，请先配置环境变量"
-        log "INFO" "配置文件: $TEMP_DIR/ess-config-template.env"
-        
-        read -p "是否现在编辑配置文件? (y/N): " edit_config
-        if [[ "$edit_config" =~ ^[Yy]$ ]]; then
-            ${EDITOR:-nano} ess-config-template.env
-            source ess-config-template.env
-        fi
-    fi
-    
+
+    # 导出环境变量供子脚本使用
+    export DOMAIN="${DOMAIN:-your-domain.com}"
+    export HTTP_PORT="${HTTP_PORT:-8080}"
+    export HTTPS_PORT="${HTTPS_PORT:-8443}"
+    export FEDERATION_PORT="${FEDERATION_PORT:-8448}"
+
+    log "INFO" "使用配置:"
+    log "INFO" "  域名: $DOMAIN"
+    log "INFO" "  HTTP端口: $HTTP_PORT"
+    log "INFO" "  HTTPS端口: $HTTPS_PORT"
+    log "INFO" "  联邦端口: $FEDERATION_PORT"
+
     # 运行部署脚本
     log "INFO" "开始部署ESS-Helm..."
     if ./deploy-ess-nginx-proxy.sh; then
@@ -294,17 +363,39 @@ show_help() {
     echo "  bash <(curl -fsSL $REPO_URL/setup.sh)"
     echo
     echo -e "${CYAN}环境变量:${NC}"
-    echo "  DEBUG=true          # 启用调试模式"
-    echo "  AUTO_DEPLOY=1       # 自动部署ESS方案"
-    echo "  AUTO_DEPLOY=2       # 自动部署IP更新系统"
-    echo "  AUTO_DEPLOY=3       # 自动完整部署"
+    echo "  DOMAIN=your-domain.com      # 您的域名 (必需)"
+    echo "  HTTP_PORT=8080              # HTTP端口"
+    echo "  HTTPS_PORT=8443             # HTTPS端口"
+    echo "  FEDERATION_PORT=8448        # Matrix联邦端口"
+    echo "  DEBUG=true                  # 启用调试模式"
+    echo "  AUTO_DEPLOY=1               # 自动部署ESS方案"
+    echo "  AUTO_DEPLOY=2               # 自动部署IP更新系统"
+    echo "  AUTO_DEPLOY=3               # 自动完整部署"
     echo
-    echo -e "${CYAN}示例:${NC}"
+    echo -e "${CYAN}推荐使用方式:${NC}"
+    echo "  # 交互式部署 (推荐新手)"
+    echo "  bash <(curl -fsSL $REPO_URL/setup.sh)"
+    echo
+    echo "  # 自动完整部署 (推荐有经验用户)"
+    echo "  DOMAIN=your-domain.com AUTO_DEPLOY=3 bash <(curl -fsSL $REPO_URL/setup.sh)"
+    echo
+    echo -e "${CYAN}完整示例:${NC}"
+    echo "  # 设置域名和端口的完整部署"
+    echo "  DOMAIN=matrix.example.com \\"
+    echo "  HTTP_PORT=8080 \\"
+    echo "  HTTPS_PORT=8443 \\"
+    echo "  AUTO_DEPLOY=3 \\"
+    echo "  bash <(curl -fsSL $REPO_URL/setup.sh)"
+    echo
     echo "  # 调试模式"
-    echo "  DEBUG=true bash <(curl -fsSL $REPO_URL/setup.sh)"
+    echo "  DEBUG=true DOMAIN=test.example.com AUTO_DEPLOY=3 \\"
+    echo "  bash <(curl -fsSL $REPO_URL/setup.sh)"
     echo
-    echo "  # 自动完整部署"
-    echo "  AUTO_DEPLOY=3 bash <(curl -fsSL $REPO_URL/setup.sh)"
+    echo -e "${CYAN}重要提醒:${NC}"
+    echo "  1. 确保域名DNS已正确解析到服务器IP"
+    echo "  2. 确保防火墙已开放相应端口"
+    echo "  3. 确保80端口可用于SSL证书验证"
+    echo "  4. 建议先在测试环境验证配置"
     echo
     echo -e "${CYAN}文件说明:${NC}"
     echo "  ess-nginx-proxy-config.md     - ESS配置指南"
