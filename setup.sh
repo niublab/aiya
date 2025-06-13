@@ -1452,11 +1452,10 @@ synapse:
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
 
-# Well-known委托配置 - 使用正确的属性名和端口号
+# Well-known委托配置 - 移除不支持的host属性
 wellKnownDelegation:
   enabled: true
   ingress:
-    host: "$SERVER_NAME"
     annotations:
       cert-manager.io/cluster-issuer: "$issuer_name"
   additional:
