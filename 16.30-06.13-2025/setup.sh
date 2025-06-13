@@ -471,7 +471,8 @@ ADMIN_PASSWORD="$ADMIN_PASSWORD"
 
 # ==================== 证书配置 ====================
 CERT_EMAIL="$CERT_EMAIL"
-CERT_ENVIRONMENT="production"   # Let's Encrypt环境
+CERT_ENVIRONMENT="$CERT_ENVIRONMENT"   # Let's Encrypt环境
+CLOUDFLARE_TOKEN="$CLOUDFLARE_TOKEN"   # Cloudflare API Token
 
 # ==================== ESS版本信息 ====================
 # 版本信息由脚本控制，不在配置文件中保存
@@ -531,6 +532,8 @@ show_config_details() {
         IP_METHOD=$(grep "^IP_METHOD=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "ddns")
         ADMIN_USERNAME=$(grep "^ADMIN_USERNAME=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
         CERT_EMAIL=$(grep "^CERT_EMAIL=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
+        CERT_ENVIRONMENT=$(grep "^CERT_ENVIRONMENT=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "production")
+        CLOUDFLARE_TOKEN=$(grep "^CLOUDFLARE_TOKEN=" "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f2 || echo "未设置")
         # 设置默认的PUBLIC_IP变量，避免未定义错误
         PUBLIC_IP="未获取"
     }

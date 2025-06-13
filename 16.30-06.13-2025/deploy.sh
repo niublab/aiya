@@ -138,6 +138,16 @@ deploy_cert_manager() {
     
     # 创建Let's Encrypt Issuer
     print_info "配置Let's Encrypt证书颁发者..."
+
+    # 创建Cloudflare API Token Secret
+    if [[ -n "$CLOUDFLARE_TOKEN" ]]; then
+        print_info "配置Cloudflare DNS验证..."
+        k3s kubectl create secret generic cloudflare-api-token-secret \
+            --from-literal=api-token="$CLOUDFLARE_TOKEN" \
+            --namespace=cert-manager \
+            --dry-run=client -o yaml | k3s kubectl apply -f -
+    fi
+
     cat << EOF | k3s kubectl apply -f -
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -150,9 +160,11 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-production
     solvers:
-    - http01:
-        ingress:
-          class: traefik
+    - dns01:
+        cloudflare:
+          apiTokenSecretRef:
+            name: cloudflare-api-token-secret
+            key: api-token
 EOF
     
     print_success "cert-manager配置完成"
