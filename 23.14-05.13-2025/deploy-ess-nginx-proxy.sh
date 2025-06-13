@@ -57,8 +57,7 @@ validate_config() {
     echo "  联邦端口: $FEDERATION_PORT"
 }
 
-# 调用配置验证
-validate_config
+# 注意: 配置验证将在main函数中调用，确保所有环境变量都已正确设置
 
 # 颜色输出
 RED='\033[0;31m'
@@ -146,10 +145,16 @@ configure_firewall() {
 # 安装K3s
 install_k3s() {
     print_info "安装K3s..."
-    
+
+    # 检查是否已安装K3s
+    if systemctl is-active --quiet k3s; then
+        print_info "K3s已经运行，跳过安装"
+        return 0
+    fi
+
     # 创建K3s配置目录
     mkdir -p /var/lib/rancher/k3s/server/manifests
-    
+
     # 创建Traefik配置
     cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << EOF
 apiVersion: helm.cattle.io/v1
@@ -169,21 +174,61 @@ spec:
         externalIPs:
         - "$(hostname -I | awk '{print $1}')"
 EOF
-    
+
     # 安装K3s
+    print_info "下载并安装K3s..."
     curl -sfL https://get.k3s.io | sh -
-    
+
+    # 等待K3s服务启动
+    print_info "等待K3s服务启动..."
+    local retry_count=0
+    while ! systemctl is-active --quiet k3s && [[ $retry_count -lt 30 ]]; do
+        sleep 2
+        ((retry_count++))
+        print_info "等待K3s启动... ($retry_count/30)"
+    done
+
+    if ! systemctl is-active --quiet k3s; then
+        print_error "K3s启动失败"
+        systemctl status k3s --no-pager
+        exit 1
+    fi
+
     # 配置kubectl
+    print_info "配置kubectl..."
     mkdir -p ~/.kube
-    export KUBECONFIG=~/.kube/config
-    k3s kubectl config view --raw > "$KUBECONFIG"
-    chmod 600 "$KUBECONFIG"
-    
-    # 等待K3s启动
-    print_info "等待K3s启动..."
-    sleep 30
-    
+
+    # 设置KUBECONFIG环境变量
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+    # 复制配置到用户目录
+    cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+    chmod 600 ~/.kube/config
+
+    # 验证kubectl连接
+    print_info "验证kubectl连接..."
+    local kubectl_retry=0
+    while ! kubectl get nodes &>/dev/null && [[ $kubectl_retry -lt 10 ]]; do
+        sleep 3
+        ((kubectl_retry++))
+        print_info "等待kubectl连接... ($kubectl_retry/10)"
+    done
+
+    if ! kubectl get nodes &>/dev/null; then
+        print_error "kubectl连接失败"
+        print_info "检查K3s状态:"
+        systemctl status k3s --no-pager
+        print_info "检查kubeconfig:"
+        ls -la /etc/rancher/k3s/k3s.yaml
+        exit 1
+    fi
+
+    # 等待所有系统Pod就绪
+    print_info "等待系统Pod就绪..."
+    kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=300s
+
     print_success "K3s安装完成"
+    kubectl get nodes
 }
 
 # 安装Helm
@@ -813,17 +858,70 @@ EOF
 # 部署ESS
 deploy_ess() {
     print_info "部署ESS..."
-    
+
+    # 验证kubectl连接
+    if ! kubectl get nodes &>/dev/null; then
+        print_error "kubectl无法连接到Kubernetes集群"
+        print_info "检查K3s状态:"
+        systemctl status k3s --no-pager
+        print_info "检查kubeconfig:"
+        echo "KUBECONFIG: ${KUBECONFIG:-未设置}"
+        ls -la ~/.kube/config 2>/dev/null || echo "~/.kube/config 不存在"
+        ls -la /etc/rancher/k3s/k3s.yaml 2>/dev/null || echo "/etc/rancher/k3s/k3s.yaml 不存在"
+        exit 1
+    fi
+
+    # 显示集群信息
+    print_info "Kubernetes集群信息:"
+    kubectl get nodes
+    kubectl get namespaces
+
     # 创建命名空间
-    kubectl create namespace "$NAMESPACE" || true
-    
+    print_info "创建命名空间: $NAMESPACE"
+    if kubectl get namespace "$NAMESPACE" &>/dev/null; then
+        print_info "命名空间 $NAMESPACE 已存在"
+    else
+        kubectl create namespace "$NAMESPACE"
+        print_success "命名空间 $NAMESPACE 创建成功"
+    fi
+
+    # 验证Helm
+    if ! command -v helm &>/dev/null; then
+        print_error "Helm未安装"
+        exit 1
+    fi
+
+    print_info "Helm版本:"
+    helm version
+
+    # 验证配置文件
+    if [[ ! -f "$INSTALL_DIR/ess-values.yaml" ]]; then
+        print_error "ESS配置文件不存在: $INSTALL_DIR/ess-values.yaml"
+        exit 1
+    fi
+
+    print_info "ESS配置文件内容:"
+    cat "$INSTALL_DIR/ess-values.yaml"
+
     # 部署ESS
-    helm upgrade --install --namespace "$NAMESPACE" ess \
+    print_info "开始部署ESS到命名空间: $NAMESPACE"
+    print_info "使用配置文件: $INSTALL_DIR/ess-values.yaml"
+
+    if helm upgrade --install --namespace "$NAMESPACE" ess \
         oci://ghcr.io/element-hq/ess-helm/matrix-stack \
         -f "$INSTALL_DIR/ess-values.yaml" \
-        --wait --timeout=10m
-    
-    print_success "ESS部署完成"
+        --wait --timeout=15m \
+        --debug; then
+        print_success "ESS部署完成"
+    else
+        print_error "ESS部署失败"
+        print_info "检查部署状态:"
+        kubectl get pods -n "$NAMESPACE"
+        kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp'
+        print_info "检查Helm状态:"
+        helm list -n "$NAMESPACE"
+        exit 1
+    fi
 }
 
 # 验证部署
