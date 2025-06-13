@@ -14,6 +14,7 @@ readonly ESS_VERSION="25.6.1"
 readonly ESS_CHART_OCI="oci://ghcr.io/element-hq/ess-helm/matrix-stack"
 readonly K3S_VERSION="v1.32.5+k3s1"
 readonly HELM_VERSION="v3.18.2"
+readonly SCRIPT_VERSION="5.0.0"
 
 # 颜色定义
 readonly RED='\033[0;31m'
@@ -42,6 +43,21 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[错误]${NC} $1"
+}
+
+print_header() {
+    echo -e "\n${CYAN}================================${NC}"
+    echo -e "${WHITE}$1${NC}"
+    echo -e "${CYAN}================================${NC}\n"
+}
+
+# 检查root权限
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_error "此脚本需要root权限运行"
+        print_info "请使用: sudo $0"
+        exit 1
+    fi
 }
 
 # 检查配置文件
@@ -338,13 +354,17 @@ EOF
 
 main() {
     print_header "Matrix ESS Community 自动部署"
-    
-    # 检查配置文件
-    if [[ ! -f "$SCRIPT_DIR/matrix-config.env" ]]; then
-        print_error "未找到配置文件，请先运行主脚本进行配置"
+
+    # 检查root权限
+    check_root
+
+    # 检查配置文件 (与setup.sh路径保持一致)
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        print_error "未找到配置文件: $CONFIG_FILE"
+        print_info "请先运行 ./setup.sh 进行配置"
         exit 1
     fi
-    
+
     print_info "开始部署流程..."
     
     # 执行部署步骤
