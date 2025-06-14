@@ -260,7 +260,28 @@ EOF
 
     # 等待所有系统Pod就绪
     print_info "等待系统Pod就绪..."
-    kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=300s
+
+    # 先检查是否有Pod存在
+    local retry_count=0
+    while [[ $retry_count -lt 30 ]]; do
+        if kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -q .; then
+            print_info "发现系统Pod，等待就绪..."
+            break
+        fi
+        sleep 5
+        ((retry_count++))
+        print_info "等待系统Pod创建... ($retry_count/30)"
+    done
+
+    # 等待Pod就绪，但允许失败
+    if kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -q .; then
+        kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=300s || {
+            print_warning "部分系统Pod可能未就绪，但继续部署"
+            kubectl get pods -n kube-system
+        }
+    else
+        print_warning "未发现系统Pod，跳过等待"
+    fi
 
     print_success "K3s安装完成"
     kubectl get nodes
