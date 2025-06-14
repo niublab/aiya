@@ -486,32 +486,51 @@ renew_certificate() {
     fi
 }
 
-# 生成SSL证书
-generate_ssl_certificates() {
-    print_info "处理SSL证书..."
-
-    # 设置默认值
+# 智能证书管理 - 检测并决定操作
+smart_certificate_management() {
+    local domain="$1"
     local cert_type="${CERT_TYPE:-letsencrypt}"
-    local test_mode="${TEST_MODE:-false}"
     local cert_email="${CERT_EMAIL:-admin@$DOMAIN}"
+    local test_mode="${TEST_MODE:-false}"
+
+    print_info "智能证书管理: $domain"
 
     # 如果启用测试模式，自动使用staging证书
     if [[ "$test_mode" == "true" ]]; then
         cert_type="letsencrypt-staging"
         print_warning "测试模式已启用，将使用Let's Encrypt Staging证书"
-        print_warning "Staging证书不被浏览器信任，仅用于测试目的"
     fi
 
-    # 检查现有证书
-    if [[ "$cert_type" == "letsencrypt" || "$cert_type" == "letsencrypt-staging" ]]; then
-        if check_existing_certificate "$DOMAIN"; then
-            print_success "使用现有证书，跳过申请"
+    # 检查证书状态
+    local cert_status=$(check_certificate_status "$domain")
+
+    case "$cert_status" in
+        "skip")
+            print_success "证书有效且完整，跳过操作"
             return 0
-        else
-            print_info "需要申请新证书或续期"
-        fi
-    fi
+            ;;
+        "renew")
+            print_info "证书需要续期"
+            if renew_certificate "$domain"; then
+                print_success "证书续期成功"
+                return 0
+            else
+                print_warning "证书续期失败，尝试重新申请"
+                # 续期失败，删除旧证书重新申请
+                rm -rf "$LETSENCRYPT_DIR/live/$domain" || true
+                rm -rf "$LETSENCRYPT_DIR/archive/$domain" || true
+                rm -rf "$LETSENCRYPT_DIR/renewal/$domain.conf" || true
+            fi
+            ;;
+        "new")
+            print_info "需要申请新证书"
+            ;;
+        *)
+            print_warning "证书状态未知，尝试申请新证书"
+            ;;
+    esac
 
+    # 申请新证书
     case "$cert_type" in
         "letsencrypt")
             generate_letsencrypt_cert "$cert_email" ""
@@ -528,6 +547,87 @@ generate_ssl_certificates() {
             exit 1
             ;;
     esac
+}
+
+# 检查证书状态并决定操作
+check_certificate_status() {
+    local domain="$1"
+    local cert_path="$LETSENCRYPT_DIR/live/$domain/fullchain.pem"
+    local key_path="$LETSENCRYPT_DIR/live/$domain/privkey.pem"
+
+    print_info "检查域名 $domain 的证书状态..."
+
+    # 检查证书文件是否存在
+    if [[ ! -f "$cert_path" || ! -f "$key_path" ]]; then
+        print_info "证书文件不存在，需要申请新证书"
+        echo "new"
+        return
+    fi
+
+    print_info "发现现有证书: $cert_path"
+
+    # 检查证书文件完整性
+    if ! openssl x509 -in "$cert_path" -noout -text >/dev/null 2>&1; then
+        print_warning "证书文件损坏，需要重新申请"
+        echo "new"
+        return
+    fi
+
+    if ! openssl rsa -in "$key_path" -check -noout >/dev/null 2>&1; then
+        print_warning "私钥文件损坏，需要重新申请"
+        echo "new"
+        return
+    fi
+
+    # 检查证书有效期
+    local expiry_date=$(openssl x509 -in "$cert_path" -noout -enddate | cut -d= -f2)
+    local expiry_epoch=$(date -d "$expiry_date" +%s 2>/dev/null)
+    local current_epoch=$(date +%s)
+
+    if [[ -z "$expiry_epoch" ]]; then
+        print_warning "无法解析证书到期时间，需要重新申请"
+        echo "new"
+        return
+    fi
+
+    local days_until_expiry=$(( (expiry_epoch - current_epoch) / 86400 ))
+
+    print_info "证书到期时间: $expiry_date"
+    print_info "剩余有效天数: $days_until_expiry 天"
+
+    # 检查证书域名是否匹配
+    local cert_domains=$(openssl x509 -in "$cert_path" -noout -text | grep -A1 "Subject Alternative Name" | tail -1 | tr ',' '\n' | grep "DNS:" | sed 's/.*DNS://' | tr -d ' ' | sort)
+    local required_domains=$(echo -e "$DOMAIN\n$WEB_SUBDOMAIN.$DOMAIN\n$AUTH_SUBDOMAIN.$DOMAIN\n$RTC_SUBDOMAIN.$DOMAIN\n$MATRIX_SUBDOMAIN.$DOMAIN" | sort)
+
+    if [[ "$cert_domains" != "$required_domains" ]]; then
+        print_warning "证书域名不匹配当前配置，需要重新申请"
+        print_info "证书包含域名:"
+        echo "$cert_domains" | sed 's/^/  - /'
+        print_info "需要的域名:"
+        echo "$required_domains" | sed 's/^/  - /'
+        echo "new"
+        return
+    fi
+
+    # 根据剩余天数决定操作
+    if [[ $days_until_expiry -gt 30 ]]; then
+        print_success "证书仍然有效且域名匹配，跳过申请"
+        echo "skip"
+    elif [[ $days_until_expiry -gt 0 ]]; then
+        print_warning "证书即将到期 ($days_until_expiry 天)，需要更新"
+        echo "renew"
+    else
+        print_error "证书已过期，需要重新申请"
+        echo "new"
+    fi
+}
+
+# 生成SSL证书 (保持向后兼容)
+generate_ssl_certificates() {
+    print_info "处理SSL证书..."
+
+    # 使用智能证书管理
+    smart_certificate_management "$DOMAIN"
 
     print_success "SSL证书配置完成"
 }
