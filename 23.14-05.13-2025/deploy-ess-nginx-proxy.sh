@@ -792,7 +792,7 @@ generate_letsencrypt_cert() {
             print_info "3. 检查防火墙:"
             print_info "   ufw status"
             print_info "4. 测试HTTP访问:"
-            print_info "   curl -I http://$DOMAIN/.well-known/acme-challenge/test"
+            print_info "   curl -I http://$DOMAIN:$HTTP_PORT/.well-known/acme-challenge/test"
         fi
 
         print_info "获取更多帮助:"
@@ -1097,16 +1097,32 @@ deploy_ess() {
 # 验证部署
 verify_deployment() {
     print_info "验证部署..."
-    
+
     # 检查Pod状态
     kubectl get pods -n "$NAMESPACE"
-    
+
     # 检查服务状态
     kubectl get svc -n "$NAMESPACE"
-    
+
     # 检查Nginx状态
     systemctl status nginx --no-pager
-    
+
+    # 测试HTTP重定向 (可选)
+    print_info "测试HTTP重定向..."
+    if curl -s -I "http://localhost:$HTTP_PORT" | grep -q "301\|302"; then
+        print_success "HTTP重定向正常"
+    else
+        print_warning "HTTP重定向可能有问题，请检查Nginx配置"
+    fi
+
+    # 测试HTTPS访问 (可选)
+    print_info "测试HTTPS访问..."
+    if curl -s -k -I "https://localhost:$HTTPS_PORT" | grep -q "200\|301\|302"; then
+        print_success "HTTPS访问正常"
+    else
+        print_warning "HTTPS访问可能有问题，请检查SSL证书和Nginx配置"
+    fi
+
     print_success "部署验证完成"
 }
 

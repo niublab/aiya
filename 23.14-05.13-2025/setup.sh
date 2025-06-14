@@ -803,6 +803,20 @@ main() {
     done
     
     log "SUCCESS" "部署完成!"
+
+    # 显示访问信息 (如果有域名配置)
+    if [[ -n "${DOMAIN:-}" && "$DOMAIN" != "your-domain.com" ]]; then
+        echo
+        log "INFO" "=== 访问地址 ==="
+        log "INFO" "Element Web: https://${WEB_SUBDOMAIN:-app}.$DOMAIN:${HTTPS_PORT:-8443}"
+        log "INFO" "认证服务:    https://${AUTH_SUBDOMAIN:-mas}.$DOMAIN:${HTTPS_PORT:-8443}"
+        log "INFO" "Matrix服务器: https://${MATRIX_SUBDOMAIN:-matrix}.$DOMAIN:${HTTPS_PORT:-8443}"
+        echo
+        log "WARNING" "请确保路由器已配置端口映射:"
+        log "INFO" "  ${HTTP_PORT:-8080} -> 服务器IP:${HTTP_PORT:-8080}"
+        log "INFO" "  ${HTTPS_PORT:-8443} -> 服务器IP:${HTTPS_PORT:-8443}"
+        log "INFO" "  ${FEDERATION_PORT:-8448} -> 服务器IP:${FEDERATION_PORT:-8448}"
+    fi
 }
 
 # 脚本入口
