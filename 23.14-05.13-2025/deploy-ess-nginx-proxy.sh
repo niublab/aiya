@@ -605,7 +605,17 @@ smart_certificate_management() {
             print_info "需要申请新证书"
             ;;
         *)
-            print_warning "证书状态未知，尝试申请新证书"
+            print_warning "证书状态检查失败，但证书文件存在"
+            # 如果证书文件存在，先尝试使用现有证书
+            if [[ -f "$LETSENCRYPT_DIR/live/$domain/fullchain.pem" ]]; then
+                print_info "发现现有证书文件，尝试验证..."
+                if openssl x509 -in "$LETSENCRYPT_DIR/live/$domain/fullchain.pem" -noout -checkend 2592000; then
+                    print_success "现有证书仍然有效 (至少30天)，跳过申请"
+                    return 0
+                else
+                    print_warning "现有证书即将过期或已过期，需要重新申请"
+                fi
+            fi
             ;;
     esac
 
@@ -652,7 +662,7 @@ check_certificate_status() {
         return
     fi
 
-    if ! openssl rsa -in "$key_path" -check -noout >/dev/null 2>&1; then
+    if ! openssl pkey -in "$key_path" -check -noout >/dev/null 2>&1; then
         print_warning "私钥文件损坏，需要重新申请"
         echo "new"
         return
