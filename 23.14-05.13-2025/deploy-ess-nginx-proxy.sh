@@ -1392,11 +1392,68 @@ validate_ess_config() {
     )
 
     for field in "${required_fields[@]}"; do
-        if grep -q "$(echo "$field" | sed 's/\./.*/')" "$config_file"; then
-            print_success "✓ $field"
-        else
-            print_error "✗ 缺少字段: $field"
-        fi
+        # 根据字段类型使用不同的检查方法
+        case "$field" in
+            "serverName")
+                if grep -q "^serverName:" "$config_file"; then
+                    print_success "✓ $field"
+                else
+                    print_error "✗ 缺少字段: $field"
+                fi
+                ;;
+            "elementWeb.ingress.host")
+                if grep -A5 "^elementWeb:" "$config_file" | grep -A3 "ingress:" | grep -q "host:"; then
+                    print_success "✓ $field"
+                else
+                    print_error "✗ 缺少字段: $field"
+                fi
+                ;;
+            "matrixAuthenticationService.ingress.host")
+                if grep -A5 "^matrixAuthenticationService:" "$config_file" | grep -A3 "ingress:" | grep -q "host:"; then
+                    print_success "✓ $field"
+                else
+                    print_error "✗ 缺少字段: $field"
+                fi
+                ;;
+            "matrixRTC.ingress.host")
+                if grep -A5 "^matrixRTC:" "$config_file" | grep -A3 "ingress:" | grep -q "host:"; then
+                    print_success "✓ $field"
+                else
+                    print_error "✗ 缺少字段: $field"
+                fi
+                ;;
+            "matrixRTC.sfu.exposedServices.rtcTcp.port")
+                if grep -A15 "^matrixRTC:" "$config_file" | grep -A10 "exposedServices:" | grep -A3 "rtcTcp:" | grep -q "port:"; then
+                    print_success "✓ $field"
+                else
+                    print_error "✗ 缺少字段: $field"
+                fi
+                ;;
+            "matrixRTC.sfu.exposedServices.rtcMuxedUdp.port")
+                if grep -A15 "^matrixRTC:" "$config_file" | grep -A10 "exposedServices:" | grep -A3 "rtcMuxedUdp:" | grep -q "port:"; then
+                    print_success "✓ $field"
+                else
+                    print_error "✗ 缺少字段: $field"
+                fi
+                ;;
+            "synapse.ingress.host")
+                if grep -A5 "^synapse:" "$config_file" | grep -A3 "ingress:" | grep -q "host:"; then
+                    print_success "✓ $field"
+                else
+                    print_error "✗ 缺少字段: $field"
+                fi
+                ;;
+            "wellKnownDelegation.enabled")
+                if grep -A3 "^wellKnownDelegation:" "$config_file" | grep -q "enabled:"; then
+                    print_success "✓ $field"
+                else
+                    print_error "✗ 缺少字段: $field"
+                fi
+                ;;
+            *)
+                print_warning "? 未知字段: $field"
+                ;;
+        esac
     done
 
     # 检查端口值是否为数字
