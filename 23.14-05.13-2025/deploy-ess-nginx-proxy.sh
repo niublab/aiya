@@ -310,7 +310,23 @@ EOF
     fi
 
     print_success "K3s安装完成"
-    kubectl get nodes
+
+    # 显示详细状态信息
+    print_info "K3s集群状态:"
+    kubectl get nodes -o wide
+
+    print_info "系统Pod状态:"
+    kubectl get pods -n kube-system
+
+    # 检查关键系统组件
+    local critical_pods=("coredns" "local-path-provisioner" "metrics-server" "traefik")
+    for pod in "${critical_pods[@]}"; do
+        if kubectl get pods -n kube-system | grep -q "$pod.*Running"; then
+            print_success "$pod 运行正常"
+        else
+            print_warning "$pod 可能未就绪"
+        fi
+    done
 }
 
 # 修复K3s连接问题
