@@ -386,12 +386,32 @@ interactive_configuration() {
             ;;
     esac
 
-    # 7. 高级配置 (可选)
+    # 7. 防火墙配置
+    echo
+    log "INFO" "7. 防火墙配置"
+    log "WARNING" "默认情况下不启用系统防火墙，依赖外部防火墙/路由器保护"
+    read -p "是否启用UFW防火墙? [y/N]: " enable_firewall
+    if [[ "$enable_firewall" =~ ^[Yy]$ ]]; then
+        export ENABLE_FIREWALL="true"
+        log "SUCCESS" "将启用UFW防火墙并配置必要规则"
+        log "INFO" "将自动配置以下端口:"
+        log "INFO" "  - SSH: 22/tcp"
+        log "INFO" "  - HTTP: ${HTTP_PORT:-8080}/tcp"
+        log "INFO" "  - HTTPS: ${HTTPS_PORT:-8443}/tcp"
+        log "INFO" "  - Federation: ${FEDERATION_PORT:-8448}/tcp"
+        log "INFO" "  - WebRTC: 30881/tcp, 30882/udp, 30152-30352/udp"
+    else
+        export ENABLE_FIREWALL="false"
+        log "INFO" "系统防火墙将保持当前状态"
+        log "WARNING" "请确保外部防火墙/路由器已正确配置端口访问"
+    fi
+
+    # 8. 高级配置 (可选)
     echo
     read -p "是否配置高级选项? [y/N]: " advanced_config
     if [[ "$advanced_config" =~ ^[Yy]$ ]]; then
         echo
-        log "INFO" "7. 高级配置"
+        log "INFO" "8. 高级配置"
 
         read -p "DDNS域名 [ip.$DOMAIN]: " user_ddns_domain
         export DDNS_DOMAIN="${user_ddns_domain:-ip.$DOMAIN}"
@@ -417,6 +437,12 @@ interactive_configuration() {
     log "INFO" "证书验证: ${CERT_CHALLENGE:-dns}"
     if [[ "${CERT_CHALLENGE:-dns}" == "dns" ]]; then
         log "INFO" "DNS提供商: ${DNS_PROVIDER:-cloudflare}"
+    fi
+    log "INFO" "防火墙: ${ENABLE_FIREWALL:-false}"
+    if [[ "${ENABLE_FIREWALL:-false}" == "true" ]]; then
+        log "INFO" "  - 将启用UFW并配置必要端口"
+    else
+        log "WARNING" "  - 系统防火墙不会被修改，请确保外部防护"
     fi
     if [[ -n "${DEBUG:-}" ]]; then
         log "INFO" "调试模式: 已启用"
@@ -654,6 +680,7 @@ show_help() {
     echo "  TEST_MODE=true              # 启用测试模式"
     echo "  CERT_TYPE=letsencrypt-staging # 证书类型"
     echo "  DEBUG=true                  # 启用调试模式"
+    echo "  ENABLE_FIREWALL=true        # 启用UFW防火墙 (默认false)"
     echo "  AUTO_DEPLOY=1               # 自动部署ESS方案"
     echo "  AUTO_DEPLOY=2               # 自动部署IP更新系统"
     echo "  AUTO_DEPLOY=3               # 自动完整部署"
@@ -667,11 +694,12 @@ show_help() {
     echo "  DOMAIN=your-domain.com AUTO_DEPLOY=3 bash <(curl -fsSL $REPO_URL/setup.sh)"
     echo
     echo -e "${CYAN}完整示例:${NC}"
-    echo "  # 生产环境完整部署 (DNS验证)"
+    echo "  # 生产环境完整部署 (DNS验证 + 防火墙)"
     echo "  DOMAIN=matrix.example.com \\"
     echo "  CERT_CHALLENGE=dns \\"
     echo "  DNS_PROVIDER=cloudflare \\"
     echo "  CLOUDFLARE_API_TOKEN=your_token \\"
+    echo "  ENABLE_FIREWALL=true \\"
     echo "  AUTO_DEPLOY=3 \\"
     echo "  bash <(curl -fsSL $REPO_URL/setup.sh)"
     echo

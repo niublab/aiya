@@ -104,17 +104,23 @@ restore_basic_iptables() {
 # 恢复UFW配置
 restore_ufw() {
     print_info "恢复UFW防火墙配置..."
-    
-    # 重置UFW
-    ufw --force reset
-    
-    # 设置默认策略
-    ufw default deny incoming
-    ufw default allow outgoing
-    
-    # 允许SSH
-    ufw allow ssh
-    ufw allow 22/tcp
+
+    # 检查是否需要启用UFW
+    local enable_firewall="${ENABLE_FIREWALL:-false}"
+
+    if [[ "$enable_firewall" == "true" ]]; then
+        print_info "启用UFW防火墙..."
+
+        # 重置UFW
+        ufw --force reset
+
+        # 设置默认策略
+        ufw default deny incoming
+        ufw default allow outgoing
+
+        # 允许SSH
+        ufw allow ssh
+        ufw allow 22/tcp
     
     # 允许HTTP和HTTPS
     ufw allow 80/tcp
@@ -153,10 +159,21 @@ restore_ufw() {
         print_info "UFW允许WebRTC UDP端口范围: $WEBRTC_UDP_RANGE_START-$WEBRTC_UDP_RANGE_END"
     fi
     
-    # 启用UFW
-    ufw --force enable
-    
-    print_success "UFW防火墙配置已恢复"
+        # 启用UFW
+        ufw --force enable
+
+        print_success "UFW防火墙配置已恢复"
+    else
+        print_info "ENABLE_FIREWALL=false，跳过UFW配置"
+        print_info "如果UFW已启用，将保持当前状态"
+
+        if ufw status | grep -q "Status: active"; then
+            print_info "UFW当前状态:"
+            ufw status numbered
+        else
+            print_info "UFW当前未启用"
+        fi
+    fi
 }
 
 # 检查网络连接

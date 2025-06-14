@@ -142,25 +142,51 @@ install_dependencies() {
 
 # 配置防火墙
 configure_firewall() {
-    print_info "配置防火墙..."
-    
-    # 允许SSH
-    ufw allow ssh
-    
-    # 允许HTTP/HTTPS端口
-    ufw allow $HTTP_PORT/tcp
-    ufw allow $HTTPS_PORT/tcp
-    ufw allow $FEDERATION_PORT/tcp
-    
-    # 允许WebRTC端口
-    ufw allow $WEBRTC_TCP_PORT/tcp
-    ufw allow $WEBRTC_UDP_PORT/udp
-    ufw allow $WEBRTC_UDP_RANGE_START:$WEBRTC_UDP_RANGE_END/udp
-    
-    # 启用防火墙
-    ufw --force enable
-    
-    print_success "防火墙配置完成"
+    local enable_firewall="${ENABLE_FIREWALL:-false}"
+
+    print_info "防火墙配置..."
+
+    if [[ "$enable_firewall" == "true" ]]; then
+        print_info "启用UFW防火墙并配置规则..."
+
+        # 设置默认策略
+        ufw --force reset
+        ufw default deny incoming
+        ufw default allow outgoing
+
+        # 允许SSH (关键 - 防止锁定)
+        ufw allow ssh
+        ufw allow 22/tcp
+
+        # 允许HTTP/HTTPS端口
+        ufw allow $HTTP_PORT/tcp
+        ufw allow $HTTPS_PORT/tcp
+        ufw allow $FEDERATION_PORT/tcp
+
+        # 允许WebRTC端口
+        ufw allow $WEBRTC_TCP_PORT/tcp
+        ufw allow $WEBRTC_UDP_PORT/udp
+        ufw allow $WEBRTC_UDP_RANGE_START:$WEBRTC_UDP_RANGE_END/udp
+
+        # 启用防火墙
+        ufw --force enable
+
+        print_success "UFW防火墙已启用并配置完成"
+        ufw status numbered
+
+    else
+        print_info "防火墙配置已跳过 (ENABLE_FIREWALL=false)"
+        print_warning "注意: 系统防火墙未启用，请确保网络安全"
+        print_info "如需启用防火墙，请设置 ENABLE_FIREWALL=true"
+
+        # 检查UFW状态
+        if ufw status | grep -q "Status: active"; then
+            print_info "检测到UFW已启用，当前状态:"
+            ufw status numbered
+        else
+            print_info "UFW当前未启用"
+        fi
+    fi
 }
 
 # 安装K3s
@@ -320,11 +346,83 @@ fix_k3s_connection() {
 
 # 安装Helm
 install_helm() {
-    print_info "安装Helm..."
-    
-    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-    
-    print_success "Helm安装完成"
+    print_info "检查Helm安装状态..."
+
+    # 检查Helm是否已安装
+    if command -v helm >/dev/null 2>&1; then
+        local helm_version=$(helm version --short 2>/dev/null | cut -d'+' -f1 | cut -d'v' -f2)
+        print_success "Helm已安装，版本: $helm_version"
+
+        # 检查版本是否满足要求 (至少3.0)
+        if [[ $(echo "$helm_version" | cut -d'.' -f1) -ge 3 ]]; then
+            print_success "Helm版本满足要求"
+            return 0
+        else
+            print_warning "Helm版本过低 ($helm_version)，需要升级"
+        fi
+    else
+        print_info "Helm未安装，开始安装..."
+    fi
+
+    # 下载并安装Helm
+    print_info "从官方脚本安装Helm..."
+    if curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash; then
+        print_success "Helm安装脚本执行完成"
+    else
+        print_error "Helm安装脚本执行失败"
+        print_info "尝试手动安装方法..."
+
+        # 备用安装方法
+        local helm_version="v3.13.3"
+        local arch=$(uname -m)
+        case $arch in
+            x86_64) arch="amd64" ;;
+            aarch64) arch="arm64" ;;
+            armv7l) arch="arm" ;;
+            *) print_error "不支持的架构: $arch"; exit 1 ;;
+        esac
+
+        local helm_url="https://get.helm.sh/helm-${helm_version}-linux-${arch}.tar.gz"
+        print_info "下载Helm: $helm_url"
+
+        cd /tmp
+        if curl -fsSL "$helm_url" -o helm.tar.gz; then
+            tar -zxf helm.tar.gz
+            mv linux-${arch}/helm /usr/local/bin/helm
+            chmod +x /usr/local/bin/helm
+            rm -rf helm.tar.gz linux-${arch}
+            print_success "Helm手动安装完成"
+        else
+            print_error "Helm下载失败"
+            exit 1
+        fi
+    fi
+
+    # 验证安装
+    if command -v helm >/dev/null 2>&1; then
+        local installed_version=$(helm version --short 2>/dev/null | cut -d'+' -f1)
+        print_success "Helm安装成功，版本: $installed_version"
+
+        # 添加Helm到PATH (如果需要)
+        if ! echo "$PATH" | grep -q "/usr/local/bin"; then
+            export PATH="/usr/local/bin:$PATH"
+            print_info "已添加/usr/local/bin到PATH"
+        fi
+
+        # 初始化Helm仓库
+        print_info "初始化Helm仓库..."
+        helm repo add stable https://charts.helm.sh/stable 2>/dev/null || true
+        helm repo update 2>/dev/null || true
+
+        print_success "Helm配置完成"
+    else
+        print_error "Helm安装验证失败"
+        print_info "请检查以下问题:"
+        print_info "1. 网络连接是否正常"
+        print_info "2. /usr/local/bin是否在PATH中"
+        print_info "3. 是否有足够的磁盘空间"
+        exit 1
+    fi
 }
 
 # 检查证书是否存在

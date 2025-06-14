@@ -46,11 +46,12 @@ show_cleanup_options() {
     echo "2) 清理K3s集群 (安全模式)"
     echo "3) 清理Nginx配置"
     echo "4) 清理SSL证书"
-    echo "5) 清理systemd服务"
-    echo "6) 清理安装目录"
-    echo "7) 清理配置文件"
-    echo "8) 清理临时文件"
-    echo "9) 完全清理 (安全模式，保留SSH)"
+    echo "5) 清理防火墙规则"
+    echo "6) 清理systemd服务"
+    echo "7) 清理安装目录"
+    echo "8) 清理配置文件"
+    echo "9) 清理临时文件"
+    echo "a) 完全清理 (安全模式，保留SSH)"
     echo "d) 危险清理 (可能断开SSH连接)"
     echo "0) 退出"
     echo
@@ -192,6 +193,45 @@ cleanup_ssl() {
     print_success "SSL证书清理完成"
 }
 
+# 清理防火墙规则
+cleanup_firewall() {
+    print_info "清理防火墙规则..."
+
+    # 检查是否启用了防火墙管理
+    local enable_firewall="${ENABLE_FIREWALL:-false}"
+
+    if [[ "$enable_firewall" == "true" ]]; then
+        print_warning "检测到启用了防火墙管理，将重置UFW规则"
+        read -p "确定要重置UFW防火墙规则吗? [y/N]: " confirm_firewall
+        if [[ "$confirm_firewall" =~ ^[Yy]$ ]]; then
+            # 重置UFW到默认状态
+            ufw --force reset
+            ufw default deny incoming
+            ufw default allow outgoing
+            ufw allow ssh
+            ufw allow 22/tcp
+            print_success "UFW防火墙已重置为安全默认状态"
+        else
+            print_info "跳过防火墙规则清理"
+        fi
+    else
+        print_info "防火墙管理未启用 (ENABLE_FIREWALL=false)"
+        print_info "不会修改现有防火墙规则"
+
+        # 显示当前UFW状态
+        if command -v ufw >/dev/null 2>&1; then
+            if ufw status | grep -q "Status: active"; then
+                print_info "当前UFW状态:"
+                ufw status numbered | head -10
+            else
+                print_info "UFW当前未启用"
+            fi
+        fi
+    fi
+
+    print_success "防火墙规则检查完成"
+}
+
 # 清理安装目录
 cleanup_install_dir() {
     print_info "清理安装目录..."
@@ -298,6 +338,7 @@ cleanup_all() {
     cleanup_k3s
     cleanup_nginx
     cleanup_ssl
+    cleanup_firewall
     cleanup_systemd_services
     cleanup_install_dir
     cleanup_config_files
@@ -359,7 +400,7 @@ quick_cleanup() {
 main_menu() {
     while true; do
         show_cleanup_options
-        read -p "请选择 [0-9,d]: " choice
+        read -p "请选择 [0-9,a,d]: " choice
 
         case "$choice" in
             "1")
@@ -375,18 +416,21 @@ main_menu() {
                 cleanup_ssl
                 ;;
             "5")
-                cleanup_systemd_services
+                cleanup_firewall
                 ;;
             "6")
-                cleanup_install_dir
+                cleanup_systemd_services
                 ;;
             "7")
-                cleanup_config_files
+                cleanup_install_dir
                 ;;
             "8")
-                cleanup_temp_files
+                cleanup_config_files
                 ;;
             "9")
+                cleanup_temp_files
+                ;;
+            "a"|"A")
                 cleanup_all
                 ;;
             "d"|"D")
@@ -419,6 +463,7 @@ show_help() {
     echo "  $0 k3s               # 仅清理K3s (安全模式)"
     echo "  $0 nginx             # 仅清理Nginx"
     echo "  $0 ssl               # 仅清理SSL证书"
+    echo "  $0 firewall          # 仅清理防火墙规则"
     echo "  $0 config            # 仅清理配置文件"
     echo
     echo "环境变量:"
@@ -451,6 +496,9 @@ main() {
             ;;
         "ssl")
             cleanup_ssl
+            ;;
+        "firewall")
+            cleanup_firewall
             ;;
         "config")
             cleanup_config_files
