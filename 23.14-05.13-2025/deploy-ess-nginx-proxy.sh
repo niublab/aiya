@@ -787,8 +787,8 @@ generate_letsencrypt_cert() {
             print_info "HTTP验证问题排查:"
             print_info "1. 检查域名解析:"
             print_info "   dig $DOMAIN @8.8.8.8"
-            print_info "2. 检查80端口:"
-            print_info "   netstat -tlnp | grep :80"
+            print_info "2. 检查HTTP端口:"
+            print_info "   netstat -tlnp | grep :$HTTP_PORT"
             print_info "3. 检查防火墙:"
             print_info "   ufw status"
             print_info "4. 测试HTTP访问:"
@@ -1033,6 +1033,9 @@ post_process_ess_config() {
     # 验证配置修复效果
     verify_config_fixes
 
+    # 最终检查硬编码端口
+    check_hardcoded_ports
+
     print_success "ESS配置文件后处理完成"
 }
 
@@ -1053,6 +1056,10 @@ fix_mas_redirect_urls() {
         sed -i "s|https://$AUTH_SUBDOMAIN\\.$DOMAIN/|https://$AUTH_SUBDOMAIN.$DOMAIN:$HTTPS_PORT/|g" "$INSTALL_DIR/mas-config.yaml"
         sed -i "s|https://$WEB_SUBDOMAIN\\.$DOMAIN/|https://$WEB_SUBDOMAIN.$DOMAIN:$HTTPS_PORT/|g" "$INSTALL_DIR/mas-config.yaml"
         sed -i "s|https://$DOMAIN/|https://$DOMAIN:$HTTPS_PORT/|g" "$INSTALL_DIR/mas-config.yaml"
+
+        # 修复任何硬编码的标准端口
+        sed -i "s|:443/|:$HTTPS_PORT/|g" "$INSTALL_DIR/mas-config.yaml"
+        sed -i "s|:80/|:$HTTP_PORT/|g" "$INSTALL_DIR/mas-config.yaml"
 
         # 更新ConfigMap
         kubectl create configmap "${mas_config_name#configmap/}" \
@@ -1082,8 +1089,12 @@ fix_synapse_wellknown_urls() {
         sed -i "s|https://$MATRIX_SUBDOMAIN\\.$DOMAIN/|https://$MATRIX_SUBDOMAIN.$DOMAIN:$HTTPS_PORT/|g" "$INSTALL_DIR/synapse-config.yaml"
         sed -i "s|https://$DOMAIN/|https://$DOMAIN:$HTTPS_PORT/|g" "$INSTALL_DIR/synapse-config.yaml"
 
-        # 修复联邦端口配置
+        # 修复联邦端口配置 (替换任何硬编码的8448端口)
         sed -i "s|:8448|:$FEDERATION_PORT|g" "$INSTALL_DIR/synapse-config.yaml"
+
+        # 修复任何硬编码的标准端口
+        sed -i "s|:443/|:$HTTPS_PORT/|g" "$INSTALL_DIR/synapse-config.yaml"
+        sed -i "s|:80/|:$HTTP_PORT/|g" "$INSTALL_DIR/synapse-config.yaml"
 
         # 更新ConfigMap
         kubectl create configmap "${synapse_config_name#configmap/}" \
@@ -1114,6 +1125,10 @@ fix_element_web_config() {
         sed -i "s|\"https://$AUTH_SUBDOMAIN\\.$DOMAIN/\"|\"https://$AUTH_SUBDOMAIN.$DOMAIN:$HTTPS_PORT/\"|g" "$INSTALL_DIR/element-config.json"
         sed -i "s|\"https://$DOMAIN/\"|\"https://$DOMAIN:$HTTPS_PORT/\"|g" "$INSTALL_DIR/element-config.json"
 
+        # 修复任何硬编码的标准端口
+        sed -i "s|\":443/\"|\":$HTTPS_PORT/\"|g" "$INSTALL_DIR/element-config.json"
+        sed -i "s|\":80/\"|\":$HTTP_PORT/\"|g" "$INSTALL_DIR/element-config.json"
+
         # 更新ConfigMap
         kubectl create configmap "${element_config_name#configmap/}" \
             --from-file=config.json="$INSTALL_DIR/element-config.json" \
@@ -1143,8 +1158,12 @@ fix_nginx_wellknown_config() {
         sed "s|https://$MATRIX_SUBDOMAIN\\.$DOMAIN/|https://$MATRIX_SUBDOMAIN.$DOMAIN:$HTTPS_PORT/|g" "$nginx_config" > "$temp_config"
         sed -i "s|https://$DOMAIN/|https://$DOMAIN:$HTTPS_PORT/|g" "$temp_config"
 
-        # 确保联邦端口正确
+        # 确保联邦端口正确 (替换任何硬编码的8448端口)
         sed -i "s|:8448|:$FEDERATION_PORT|g" "$temp_config"
+
+        # 修复任何硬编码的标准端口
+        sed -i "s|:443/|:$HTTPS_PORT/|g" "$temp_config"
+        sed -i "s|:80/|:$HTTP_PORT/|g" "$temp_config"
 
         # 添加特殊的well-known处理 (如果不存在)
         if ! grep -q "location.*well-known.*matrix" "$temp_config"; then
@@ -1371,6 +1390,63 @@ check_service_health() {
 
     # 检查服务端点
     kubectl get endpoints -n "$NAMESPACE"
+}
+
+# 检查硬编码端口
+check_hardcoded_ports() {
+    print_info "检查配置文件中的硬编码端口..."
+
+    local hardcoded_found=0
+    local check_files=(
+        "$INSTALL_DIR/mas-config.yaml"
+        "$INSTALL_DIR/synapse-config.yaml"
+        "$INSTALL_DIR/element-config.json"
+        "$NGINX_SITES_AVAILABLE/matrix-ess"
+    )
+
+    # 检查本地配置文件
+    for file in "${check_files[@]}"; do
+        if [[ -f "$file" ]]; then
+            print_info "检查文件: $file"
+
+            # 检查常见的硬编码端口
+            local hardcoded_ports=(":80/" ":443/" ":8080/" ":8443/" ":8448/")
+            for port in "${hardcoded_ports[@]}"; do
+                if grep -q "$port" "$file" 2>/dev/null; then
+                    # 排除我们自己配置的端口
+                    if [[ "$port" == ":$HTTP_PORT/" ]] || [[ "$port" == ":$HTTPS_PORT/" ]] || [[ "$port" == ":$FEDERATION_PORT/" ]]; then
+                        continue
+                    fi
+                    print_warning "发现硬编码端口 $port 在文件 $file"
+                    ((hardcoded_found++))
+                fi
+            done
+        fi
+    done
+
+    # 检查Kubernetes ConfigMap
+    print_info "检查Kubernetes ConfigMap..."
+    local configmaps=$(kubectl get configmap -n "$NAMESPACE" -o name 2>/dev/null || true)
+
+    for cm in $configmaps; do
+        # 检查ConfigMap中的硬编码端口
+        local cm_content=$(kubectl get "$cm" -n "$NAMESPACE" -o yaml 2>/dev/null || echo "")
+
+        # 检查是否包含不应该存在的硬编码端口
+        if echo "$cm_content" | grep -E ":80[^0-9]|:443[^0-9]|:8080[^0-9]|:8443[^0-9]|:8448[^0-9]" | grep -v ":$HTTP_PORT\|:$HTTPS_PORT\|:$FEDERATION_PORT" >/dev/null 2>&1; then
+            print_warning "ConfigMap $cm 可能包含硬编码端口"
+            ((hardcoded_found++))
+        fi
+    done
+
+    if [[ $hardcoded_found -eq 0 ]]; then
+        print_success "未发现硬编码端口，所有配置正确使用变量"
+    else
+        print_warning "发现 $hardcoded_found 个可能的硬编码端口问题"
+        print_info "请检查上述文件和ConfigMap"
+    fi
+
+    return $hardcoded_found
 }
 
 # 部署ESS
