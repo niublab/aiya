@@ -507,12 +507,29 @@ deploy_ess() {
         return 1
     fi
 
-    # 运行部署脚本，显式传递环境变量
+    # 运行部署脚本，显式传递所有环境变量
     log "INFO" "开始部署ESS-Helm..."
     if env DOMAIN="$DOMAIN" \
            HTTP_PORT="$HTTP_PORT" \
            HTTPS_PORT="$HTTPS_PORT" \
            FEDERATION_PORT="$FEDERATION_PORT" \
+           INSTALL_DIR="${INSTALL_DIR:-/opt/matrix-ess}" \
+           NAMESPACE="${NAMESPACE:-ess}" \
+           WEB_SUBDOMAIN="${WEB_SUBDOMAIN:-app}" \
+           AUTH_SUBDOMAIN="${AUTH_SUBDOMAIN:-mas}" \
+           RTC_SUBDOMAIN="${RTC_SUBDOMAIN:-rtc}" \
+           MATRIX_SUBDOMAIN="${MATRIX_SUBDOMAIN:-matrix}" \
+           WEBRTC_TCP_PORT="${WEBRTC_TCP_PORT:-30881}" \
+           WEBRTC_UDP_PORT="${WEBRTC_UDP_PORT:-30882}" \
+           WEBRTC_UDP_RANGE_START="${WEBRTC_UDP_RANGE_START:-30152}" \
+           WEBRTC_UDP_RANGE_END="${WEBRTC_UDP_RANGE_END:-30352}" \
+           CERT_EMAIL="${CERT_EMAIL:-admin@$DOMAIN}" \
+           ADMIN_EMAIL="${ADMIN_EMAIL:-admin@$DOMAIN}" \
+           CERT_CHALLENGE="${CERT_CHALLENGE:-dns}" \
+           DNS_PROVIDER="${DNS_PROVIDER:-cloudflare}" \
+           CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}" \
+           ENABLE_FIREWALL="${ENABLE_FIREWALL:-false}" \
+           DEBUG="${DEBUG:-false}" \
            ./deploy-ess-nginx-proxy.sh; then
         log "SUCCESS" "ESS-Helm部署完成!"
     else
@@ -607,12 +624,29 @@ deploy_test() {
         return 1
     fi
 
-    # 运行部署脚本
+    # 运行部署脚本，显式传递所有环境变量
     log "INFO" "开始测试模式部署..."
     if env DOMAIN="$DOMAIN" \
            HTTP_PORT="$HTTP_PORT" \
            HTTPS_PORT="$HTTPS_PORT" \
            FEDERATION_PORT="$FEDERATION_PORT" \
+           INSTALL_DIR="${INSTALL_DIR:-/opt/matrix-ess}" \
+           NAMESPACE="${NAMESPACE:-ess}" \
+           WEB_SUBDOMAIN="${WEB_SUBDOMAIN:-app}" \
+           AUTH_SUBDOMAIN="${AUTH_SUBDOMAIN:-mas}" \
+           RTC_SUBDOMAIN="${RTC_SUBDOMAIN:-rtc}" \
+           MATRIX_SUBDOMAIN="${MATRIX_SUBDOMAIN:-matrix}" \
+           WEBRTC_TCP_PORT="${WEBRTC_TCP_PORT:-30881}" \
+           WEBRTC_UDP_PORT="${WEBRTC_UDP_PORT:-30882}" \
+           WEBRTC_UDP_RANGE_START="${WEBRTC_UDP_RANGE_START:-30152}" \
+           WEBRTC_UDP_RANGE_END="${WEBRTC_UDP_RANGE_END:-30352}" \
+           CERT_EMAIL="${CERT_EMAIL:-admin@$DOMAIN}" \
+           ADMIN_EMAIL="${ADMIN_EMAIL:-admin@$DOMAIN}" \
+           CERT_CHALLENGE="${CERT_CHALLENGE:-dns}" \
+           DNS_PROVIDER="${DNS_PROVIDER:-cloudflare}" \
+           CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}" \
+           ENABLE_FIREWALL="${ENABLE_FIREWALL:-false}" \
+           DEBUG="${DEBUG:-false}" \
            TEST_MODE="$TEST_MODE" \
            CERT_TYPE="$CERT_TYPE" \
            ./deploy-ess-nginx-proxy.sh; then
