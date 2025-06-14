@@ -1638,7 +1638,5 @@ main() {
     print_success "ESS外部Nginx反代部署完成!"
 }
 
-# 脚本入口
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+# 脚本入口 - 直接执行主函数 (支持bash <(curl)方式)
+main "$@"

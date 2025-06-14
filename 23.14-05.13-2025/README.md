@@ -140,6 +140,31 @@ IP更新系统 ←→ 配置模板系统
 - **连接复用**: Keep-Alive优化
 - **资源限制**: Systemd资源控制
 
+## 🧹 清理和卸载
+
+### 清理脚本使用
+```bash
+# 交互式清理 (推荐)
+bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/23.14-05.13-2025/cleanup.sh)
+
+# 完全清理 (保留SSL证书)
+bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/23.14-05.13-2025/cleanup.sh) --full
+
+# 仅清理ESS部署
+bash <(curl -fsSL https://raw.githubusercontent.com/niublab/aiya/main/23.14-05.13-2025/cleanup.sh) --ess-only
+```
+
+### 清理选项
+1. 清理ESS Helm部署
+2. 清理K3s集群
+3. 清理Nginx配置
+4. 清理SSL证书
+5. 清理systemd服务
+6. 清理安装目录
+7. 清理配置文件
+8. 清理临时文件
+9. 完全清理 (所有组件)
+
 ## 🔍 监控和维护
 
 ### 状态检查
