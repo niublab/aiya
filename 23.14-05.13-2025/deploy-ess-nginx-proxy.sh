@@ -1236,7 +1236,18 @@ EOF
 # 生成ESS配置
 generate_ess_config() {
     print_info "生成ESS配置..."
-    
+
+    # 确保安装目录存在
+    mkdir -p "$INSTALL_DIR"
+
+    # 备份现有配置文件 (如果存在)
+    if [[ -f "$INSTALL_DIR/ess-values.yaml" ]]; then
+        local backup_suffix=$(date +%Y%m%d_%H%M%S)
+        cp "$INSTALL_DIR/ess-values.yaml" "$INSTALL_DIR/ess-values.yaml.backup.$backup_suffix"
+        print_info "已备份现有配置文件"
+    fi
+
+    # 基于官方schema生成正确的配置文件
     cat > "$INSTALL_DIR/ess-values.yaml" << EOF
 # ESS外部Nginx反代配置
 serverName: "$DOMAIN"
@@ -1269,11 +1280,11 @@ matrixRTC:
       rtcTcp:
         enabled: true
         portType: NodePort
-        port: ${WEBRTC_TCP_PORT}
+        port: $WEBRTC_TCP_PORT
       rtcMuxedUdp:
         enabled: true
         portType: NodePort
-        port: ${WEBRTC_UDP_PORT}
+        port: $WEBRTC_UDP_PORT
 
 # Synapse配置
 synapse:
@@ -1281,14 +1292,97 @@ synapse:
     host: "$MATRIX_SUBDOMAIN.$DOMAIN"
     tlsEnabled: false
 
-# Well-known配置
+# Well-known配置 (基于官方schema - 移除不支持的host属性)
 wellKnownDelegation:
   enabled: true
   ingress:
     tlsEnabled: false
 EOF
-    
-    print_success "ESS配置生成完成"
+
+    # 验证生成的配置文件
+    if [[ -f "$INSTALL_DIR/ess-values.yaml" ]]; then
+        print_success "ESS配置生成完成"
+        print_info "配置文件位置: $INSTALL_DIR/ess-values.yaml"
+
+        # 显示关键配置信息
+        print_info "关键配置信息:"
+        echo "  域名: $DOMAIN"
+        echo "  WebRTC TCP端口: $WEBRTC_TCP_PORT"
+        echo "  WebRTC UDP端口: $WEBRTC_UDP_PORT"
+        echo "  子域名配置:"
+        echo "    - Element Web: $WEB_SUBDOMAIN.$DOMAIN"
+        echo "    - MAS: $AUTH_SUBDOMAIN.$DOMAIN"
+        echo "    - RTC: $RTC_SUBDOMAIN.$DOMAIN"
+        echo "    - Matrix: $MATRIX_SUBDOMAIN.$DOMAIN"
+
+        # 验证配置文件语法
+        validate_ess_config
+    else
+        print_error "ESS配置文件生成失败"
+        return 1
+    fi
+}
+
+# 验证ESS配置文件
+validate_ess_config() {
+    print_info "验证ESS配置文件语法..."
+
+    local config_file="$INSTALL_DIR/ess-values.yaml"
+
+    # 检查YAML语法
+    if command -v python3 >/dev/null 2>&1; then
+        if python3 -c "import yaml; yaml.safe_load(open('$config_file'))" 2>/dev/null; then
+            print_success "YAML语法验证通过"
+        else
+            print_error "YAML语法验证失败"
+            return 1
+        fi
+    elif command -v yq >/dev/null 2>&1; then
+        if yq eval '.' "$config_file" >/dev/null 2>&1; then
+            print_success "YAML语法验证通过"
+        else
+            print_error "YAML语法验证失败"
+            return 1
+        fi
+    else
+        print_warning "无法验证YAML语法 (缺少python3或yq)"
+    fi
+
+    # 检查关键字段
+    local required_fields=(
+        "serverName"
+        "elementWeb.ingress.host"
+        "matrixAuthenticationService.ingress.host"
+        "matrixRTC.ingress.host"
+        "matrixRTC.sfu.exposedServices.rtcTcp.port"
+        "matrixRTC.sfu.exposedServices.rtcMuxedUdp.port"
+        "synapse.ingress.host"
+        "wellKnownDelegation.enabled"
+    )
+
+    for field in "${required_fields[@]}"; do
+        if grep -q "$(echo "$field" | sed 's/\./.*/')" "$config_file"; then
+            print_success "✓ $field"
+        else
+            print_error "✗ 缺少字段: $field"
+        fi
+    done
+
+    # 检查端口值是否为数字
+    local tcp_port=$(grep -A5 "rtcTcp:" "$config_file" | grep "port:" | awk '{print $2}')
+    local udp_port=$(grep -A5 "rtcMuxedUdp:" "$config_file" | grep "port:" | awk '{print $2}')
+
+    if [[ "$tcp_port" =~ ^[0-9]+$ ]]; then
+        print_success "✓ WebRTC TCP端口格式正确: $tcp_port"
+    else
+        print_error "✗ WebRTC TCP端口格式错误: $tcp_port"
+    fi
+
+    if [[ "$udp_port" =~ ^[0-9]+$ ]]; then
+        print_success "✓ WebRTC UDP端口格式正确: $udp_port"
+    else
+        print_error "✗ WebRTC UDP端口格式错误: $udp_port"
+    fi
 }
 
 # 后处理ESS配置文件 (修复端口问题)
@@ -1827,25 +1921,54 @@ deploy_ess() {
     print_info "ESS配置文件内容:"
     cat "$INSTALL_DIR/ess-values.yaml"
 
-    # 部署ESS
+    # 部署ESS (支持自动重试和配置修复)
     print_info "开始部署ESS到命名空间: $NAMESPACE"
     print_info "使用配置文件: $INSTALL_DIR/ess-values.yaml"
 
-    if helm upgrade --install --namespace "$NAMESPACE" ess \
-        oci://ghcr.io/element-hq/ess-helm/matrix-stack \
-        -f "$INSTALL_DIR/ess-values.yaml" \
-        --wait --timeout=15m \
-        --debug; then
-        print_success "ESS部署完成"
+    local deployment_success=false
+    local max_retries=2
+    local retry=0
 
-        # 等待配置文件生成
-        print_info "等待ESS配置文件生成..."
-        sleep 30
+    while [[ $retry -lt $max_retries && "$deployment_success" == "false" ]]; do
+        if [[ $retry -gt 0 ]]; then
+            print_info "第 $((retry + 1)) 次尝试部署ESS..."
 
-        # 后处理ESS配置文件
-        post_process_ess_config
-    else
-        print_error "ESS部署失败"
+            # 重新生成配置文件
+            print_warning "重新生成ESS配置文件..."
+            generate_ess_config
+        fi
+
+        # 尝试部署
+        if helm upgrade --install --namespace "$NAMESPACE" ess \
+            oci://ghcr.io/element-hq/ess-helm/matrix-stack \
+            -f "$INSTALL_DIR/ess-values.yaml" \
+            --wait --timeout=15m \
+            --debug; then
+
+            print_success "ESS部署完成"
+            deployment_success=true
+
+            # 等待配置文件生成
+            print_info "等待ESS配置文件生成..."
+            sleep 30
+
+            # 后处理ESS配置文件
+            post_process_ess_config
+
+        else
+            print_error "ESS部署失败 (尝试 $((retry + 1))/$max_retries)"
+
+            # 分析失败原因并尝试修复
+            if analyze_and_fix_deployment_failure; then
+                print_info "已尝试修复配置，将重试部署"
+            fi
+
+            ((retry++))
+        fi
+    done
+
+    if [[ "$deployment_success" == "false" ]]; then
+        print_error "ESS部署最终失败"
         print_info "检查部署状态:"
         kubectl get pods -n "$NAMESPACE"
         kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp'
@@ -1853,6 +1976,63 @@ deploy_ess() {
         helm list -n "$NAMESPACE"
         exit 1
     fi
+}
+
+# 分析并修复部署失败
+analyze_and_fix_deployment_failure() {
+    print_info "分析部署失败原因..."
+
+    local config_file="$INSTALL_DIR/ess-values.yaml"
+    local fixed=false
+
+    # 检查是否是schema错误
+    local schema_error=$(helm upgrade --install --namespace "$NAMESPACE" ess \
+        oci://ghcr.io/element-hq/ess-helm/matrix-stack \
+        -f "$config_file" \
+        --debug --dry-run 2>&1 | grep -i "schema\|Invalid type\|Additional property" || true)
+
+    if [[ -n "$schema_error" ]]; then
+        print_warning "检测到schema错误:"
+        echo "$schema_error"
+
+        # 备份当前配置
+        local backup_suffix=$(date +%Y%m%d_%H%M%S)
+        cp "$config_file" "$config_file.error-backup.$backup_suffix"
+
+        # 修复已知的schema错误
+        print_info "尝试修复schema错误..."
+
+        # 修复端口类型错误 (移除多余的引号)
+        if echo "$schema_error" | grep -q "Invalid type.*Expected: number"; then
+            print_info "修复端口类型错误..."
+            sed -i 's/port: "\([0-9]*\)"/port: \1/g' "$config_file"
+            sed -i 's/port: \([0-9]*\)".*$/port: \1/' "$config_file"
+            fixed=true
+        fi
+
+        # 修复wellKnownDelegation配置错误
+        if echo "$schema_error" | grep -q "wellKnownDelegation.*Additional property.*host"; then
+            print_info "修复wellKnownDelegation配置错误..."
+            sed -i '/wellKnownDelegation:/,/^[^ ]/ { /host:/d; }' "$config_file"
+            fixed=true
+        fi
+
+        # 验证修复后的配置
+        if [[ "$fixed" == "true" ]]; then
+            print_success "配置错误已修复"
+            validate_ess_config
+            return 0
+        fi
+    fi
+
+    # 检查其他常见错误
+    local error_events=$(kubectl get events -n "$NAMESPACE" --field-selector type=Warning --sort-by='.lastTimestamp' | tail -5)
+    if [[ -n "$error_events" ]]; then
+        print_info "最近的错误事件:"
+        echo "$error_events"
+    fi
+
+    return 1
 }
 
 # 验证部署
