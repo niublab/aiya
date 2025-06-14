@@ -70,15 +70,32 @@ restore_basic_iptables() {
         iptables -A INPUT -p tcp --dport "$HTTP_PORT" -j ACCEPT
         print_info "允许自定义HTTP端口: $HTTP_PORT"
     fi
-    
+
     if [[ -n "${HTTPS_PORT:-}" && "$HTTPS_PORT" != "443" ]]; then
         iptables -A INPUT -p tcp --dport "$HTTPS_PORT" -j ACCEPT
         print_info "允许自定义HTTPS端口: $HTTPS_PORT"
     fi
-    
+
     if [[ -n "${FEDERATION_PORT:-}" ]]; then
         iptables -A INPUT -p tcp --dport "$FEDERATION_PORT" -j ACCEPT
         print_info "允许联邦端口: $FEDERATION_PORT"
+    fi
+
+    # 允许WebRTC端口 (如果设置了)
+    if [[ -n "${WEBRTC_TCP_PORT:-}" ]]; then
+        iptables -A INPUT -p tcp --dport "$WEBRTC_TCP_PORT" -j ACCEPT
+        print_info "允许WebRTC TCP端口: $WEBRTC_TCP_PORT"
+    fi
+
+    if [[ -n "${WEBRTC_UDP_PORT:-}" ]]; then
+        iptables -A INPUT -p udp --dport "$WEBRTC_UDP_PORT" -j ACCEPT
+        print_info "允许WebRTC UDP端口: $WEBRTC_UDP_PORT"
+    fi
+
+    # 允许WebRTC UDP端口范围 (如果设置了)
+    if [[ -n "${WEBRTC_UDP_RANGE_START:-}" && -n "${WEBRTC_UDP_RANGE_END:-}" ]]; then
+        iptables -A INPUT -p udp --dport "$WEBRTC_UDP_RANGE_START:$WEBRTC_UDP_RANGE_END" -j ACCEPT
+        print_info "允许WebRTC UDP端口范围: $WEBRTC_UDP_RANGE_START-$WEBRTC_UDP_RANGE_END"
     fi
     
     print_success "基础iptables规则已恢复"
@@ -108,15 +125,32 @@ restore_ufw() {
         ufw allow "$HTTP_PORT/tcp"
         print_info "UFW允许自定义HTTP端口: $HTTP_PORT"
     fi
-    
+
     if [[ -n "${HTTPS_PORT:-}" && "$HTTPS_PORT" != "443" ]]; then
         ufw allow "$HTTPS_PORT/tcp"
         print_info "UFW允许自定义HTTPS端口: $HTTPS_PORT"
     fi
-    
+
     if [[ -n "${FEDERATION_PORT:-}" ]]; then
         ufw allow "$FEDERATION_PORT/tcp"
         print_info "UFW允许联邦端口: $FEDERATION_PORT"
+    fi
+
+    # 允许WebRTC端口
+    if [[ -n "${WEBRTC_TCP_PORT:-}" ]]; then
+        ufw allow "$WEBRTC_TCP_PORT/tcp"
+        print_info "UFW允许WebRTC TCP端口: $WEBRTC_TCP_PORT"
+    fi
+
+    if [[ -n "${WEBRTC_UDP_PORT:-}" ]]; then
+        ufw allow "$WEBRTC_UDP_PORT/udp"
+        print_info "UFW允许WebRTC UDP端口: $WEBRTC_UDP_PORT"
+    fi
+
+    # 允许WebRTC UDP端口范围
+    if [[ -n "${WEBRTC_UDP_RANGE_START:-}" && -n "${WEBRTC_UDP_RANGE_END:-}" ]]; then
+        ufw allow "$WEBRTC_UDP_RANGE_START:$WEBRTC_UDP_RANGE_END/udp"
+        print_info "UFW允许WebRTC UDP端口范围: $WEBRTC_UDP_RANGE_START-$WEBRTC_UDP_RANGE_END"
     fi
     
     # 启用UFW
