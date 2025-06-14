@@ -1265,7 +1265,7 @@ serverName: "DOMAIN_PLACEHOLDER"
 
 # 全局Ingress配置 - 禁用TLS (由外部Nginx处理)
 ingress:
-  tlsEnabled: false
+  enabled: true
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
 
@@ -1273,19 +1273,16 @@ ingress:
 elementWeb:
   ingress:
     host: "WEB_SUBDOMAIN_PLACEHOLDER.DOMAIN_PLACEHOLDER"
-    tlsEnabled: false
 
 # Matrix Authentication Service配置
 matrixAuthenticationService:
   ingress:
     host: "AUTH_SUBDOMAIN_PLACEHOLDER.DOMAIN_PLACEHOLDER"
-    tlsEnabled: false
 
 # Matrix RTC配置
 matrixRTC:
   ingress:
     host: "RTC_SUBDOMAIN_PLACEHOLDER.DOMAIN_PLACEHOLDER"
-    tlsEnabled: false
   sfu:
     exposedServices:
       rtcTcp:
@@ -1301,13 +1298,10 @@ matrixRTC:
 synapse:
   ingress:
     host: "MATRIX_SUBDOMAIN_PLACEHOLDER.DOMAIN_PLACEHOLDER"
-    tlsEnabled: false
 
 # Well-known配置 (基于官方schema)
 wellKnownDelegation:
   enabled: true
-  ingress:
-    tlsEnabled: false
 EOF
 
     # 第二阶段: 替换占位符为实际值
