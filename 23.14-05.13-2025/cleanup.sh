@@ -46,9 +46,11 @@ show_cleanup_options() {
     echo "2) 清理K3s集群"
     echo "3) 清理Nginx配置"
     echo "4) 清理SSL证书"
-    echo "5) 清理安装目录"
-    echo "6) 完全清理 (所有组件)"
-    echo "7) 仅清理配置文件"
+    echo "5) 清理systemd服务"
+    echo "6) 清理安装目录"
+    echo "7) 清理配置文件"
+    echo "8) 清理临时文件"
+    echo "9) 完全清理 (所有组件)"
     echo "0) 退出"
     echo
 }
@@ -183,27 +185,91 @@ cleanup_ssl() {
 # 清理安装目录
 cleanup_install_dir() {
     print_info "清理安装目录..."
-    
+
     local install_dir="${INSTALL_DIR:-/opt/matrix-ess}"
-    
+
+    # 清理主安装目录
     if [[ -d "$install_dir" ]]; then
         rm -rf "$install_dir"
         print_success "安装目录清理完成: $install_dir"
     else
         print_info "安装目录不存在: $install_dir"
     fi
+
+    # 清理IP更新系统目录
+    if [[ -d "/opt/ip-updater" ]]; then
+        print_info "清理IP更新系统目录..."
+        rm -rf "/opt/ip-updater"
+        print_success "IP更新系统目录清理完成"
+    fi
+
+    # 清理数据目录
+    local data_dirs=(
+        "/var/lib/matrix-ess"
+        "/var/log/matrix-ess"
+        "/var/backups/matrix-ess"
+    )
+
+    for dir in "${data_dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            print_info "清理数据目录: $dir"
+            rm -rf "$dir"
+        fi
+    done
+}
+
+# 清理systemd服务
+cleanup_systemd_services() {
+    print_info "清理systemd服务..."
+
+    # 停止并禁用IP更新服务
+    systemctl stop ip-update.timer 2>/dev/null || true
+    systemctl stop ip-update.service 2>/dev/null || true
+    systemctl disable ip-update.timer 2>/dev/null || true
+    systemctl disable ip-update.service 2>/dev/null || true
+
+    # 删除服务文件
+    rm -f /etc/systemd/system/ip-update.service
+    rm -f /etc/systemd/system/ip-update.timer
+
+    # 重载systemd
+    systemctl daemon-reload
+
+    print_success "systemd服务清理完成"
 }
 
 # 清理配置文件
 cleanup_config_files() {
     print_info "清理配置文件..."
-    
+
     # 清理当前目录的配置文件
     rm -f ess-config-template.env
     rm -f ess-values.yaml
     rm -f nginx.conf.template
-    
+
+    # 清理生成的配置备份文件
+    rm -f "$INSTALL_DIR"/*-backup.yaml 2>/dev/null || true
+    rm -f "$INSTALL_DIR"/*.yaml 2>/dev/null || true
+    rm -f "$INSTALL_DIR"/*.json 2>/dev/null || true
+
     print_success "配置文件清理完成"
+}
+
+# 清理临时文件
+cleanup_temp_files() {
+    print_info "清理临时文件..."
+
+    # 清理setup.sh创建的临时目录
+    rm -rf /tmp/ess-installer-* 2>/dev/null || true
+
+    # 清理下载的文件目录
+    rm -rf "$HOME"/ess-installer-* 2>/dev/null || true
+
+    # 清理其他临时文件
+    rm -f /tmp/matrix-*.log 2>/dev/null || true
+    rm -f /tmp/ess-*.log 2>/dev/null || true
+
+    print_success "临时文件清理完成"
 }
 
 # 完全清理
@@ -221,9 +287,11 @@ cleanup_all() {
     cleanup_k3s
     cleanup_nginx
     cleanup_ssl
+    cleanup_systemd_services
     cleanup_install_dir
     cleanup_config_files
-    
+    cleanup_temp_files
+
     print_success "完全清理完成"
 }
 
@@ -242,8 +310,8 @@ quick_cleanup() {
 main_menu() {
     while true; do
         show_cleanup_options
-        read -p "请选择 [0-7]: " choice
-        
+        read -p "请选择 [0-9]: " choice
+
         case "$choice" in
             "1")
                 cleanup_ess
@@ -258,13 +326,19 @@ main_menu() {
                 cleanup_ssl
                 ;;
             "5")
-                cleanup_install_dir
+                cleanup_systemd_services
                 ;;
             "6")
-                cleanup_all
+                cleanup_install_dir
                 ;;
             "7")
                 cleanup_config_files
+                ;;
+            "8")
+                cleanup_temp_files
+                ;;
+            "9")
+                cleanup_all
                 ;;
             "0")
                 print_info "退出清理工具"

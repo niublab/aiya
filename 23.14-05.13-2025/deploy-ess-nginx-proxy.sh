@@ -1003,14 +1003,20 @@ post_process_ess_config() {
     # 等待Pod完全启动
     local retry=0
     while [[ $retry -lt 20 ]]; do
-        if kubectl get pods -n "$NAMESPACE" | grep -E "(Running|Completed)" | wc -l | grep -q "[3-9]"; then
-            print_success "ESS Pod已启动"
+        local running_pods=$(kubectl get pods -n "$NAMESPACE" --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+        if [[ $running_pods -ge 3 ]]; then
+            print_success "ESS Pod已启动 ($running_pods 个Pod运行中)"
             break
         fi
         sleep 15
         ((retry++))
-        print_info "等待ESS Pod启动... ($retry/20)"
+        print_info "等待ESS Pod启动... ($retry/20) - 当前运行: $running_pods 个Pod"
     done
+
+    if [[ $retry -eq 20 ]]; then
+        print_warning "等待Pod启动超时，继续执行配置修复"
+        kubectl get pods -n "$NAMESPACE"
+    fi
 
     # 修复MAS配置中的重定向URL
     fix_mas_redirect_urls
