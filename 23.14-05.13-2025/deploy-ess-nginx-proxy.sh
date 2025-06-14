@@ -1313,14 +1313,14 @@ EOF
     # 第二阶段: 替换占位符为实际值
     print_info "第二阶段: 替换配置变量..."
 
-    # 使用sed进行安全的变量替换
-    sed -i "s/DOMAIN_PLACEHOLDER/$DOMAIN/g" "$INSTALL_DIR/ess-values.yaml"
-    sed -i "s/WEB_SUBDOMAIN_PLACEHOLDER/$WEB_SUBDOMAIN/g" "$INSTALL_DIR/ess-values.yaml"
-    sed -i "s/AUTH_SUBDOMAIN_PLACEHOLDER/$AUTH_SUBDOMAIN/g" "$INSTALL_DIR/ess-values.yaml"
-    sed -i "s/RTC_SUBDOMAIN_PLACEHOLDER/$RTC_SUBDOMAIN/g" "$INSTALL_DIR/ess-values.yaml"
-    sed -i "s/MATRIX_SUBDOMAIN_PLACEHOLDER/$MATRIX_SUBDOMAIN/g" "$INSTALL_DIR/ess-values.yaml"
-    sed -i "s/WEBRTC_TCP_PORT_PLACEHOLDER/$WEBRTC_TCP_PORT/g" "$INSTALL_DIR/ess-values.yaml"
-    sed -i "s/WEBRTC_UDP_PORT_PLACEHOLDER/$WEBRTC_UDP_PORT/g" "$INSTALL_DIR/ess-values.yaml"
+    # 使用sed进行安全的变量替换 (先替换复合占位符，避免部分替换问题)
+    sed -i "s/WEB_SUBDOMAIN_PLACEHOLDER\.DOMAIN_PLACEHOLDER/${WEB_SUBDOMAIN}.${DOMAIN}/g" "$INSTALL_DIR/ess-values.yaml"
+    sed -i "s/AUTH_SUBDOMAIN_PLACEHOLDER\.DOMAIN_PLACEHOLDER/${AUTH_SUBDOMAIN}.${DOMAIN}/g" "$INSTALL_DIR/ess-values.yaml"
+    sed -i "s/RTC_SUBDOMAIN_PLACEHOLDER\.DOMAIN_PLACEHOLDER/${RTC_SUBDOMAIN}.${DOMAIN}/g" "$INSTALL_DIR/ess-values.yaml"
+    sed -i "s/MATRIX_SUBDOMAIN_PLACEHOLDER\.DOMAIN_PLACEHOLDER/${MATRIX_SUBDOMAIN}.${DOMAIN}/g" "$INSTALL_DIR/ess-values.yaml"
+    sed -i "s/DOMAIN_PLACEHOLDER/${DOMAIN}/g" "$INSTALL_DIR/ess-values.yaml"
+    sed -i "s/WEBRTC_TCP_PORT_PLACEHOLDER/${WEBRTC_TCP_PORT}/g" "$INSTALL_DIR/ess-values.yaml"
+    sed -i "s/WEBRTC_UDP_PORT_PLACEHOLDER/${WEBRTC_UDP_PORT}/g" "$INSTALL_DIR/ess-values.yaml"
 
     # 第三阶段: 验证和后处理
     print_info "第三阶段: 验证配置文件..."
