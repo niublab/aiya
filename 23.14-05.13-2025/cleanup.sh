@@ -43,14 +43,15 @@ show_cleanup_options() {
     echo "选择要清理的组件:"
     echo
     echo "1) 清理ESS Helm部署"
-    echo "2) 清理K3s集群"
+    echo "2) 清理K3s集群 (安全模式)"
     echo "3) 清理Nginx配置"
     echo "4) 清理SSL证书"
     echo "5) 清理systemd服务"
     echo "6) 清理安装目录"
     echo "7) 清理配置文件"
     echo "8) 清理临时文件"
-    echo "9) 完全清理 (所有组件)"
+    echo "9) 完全清理 (安全模式，保留SSH)"
+    echo "d) 危险清理 (可能断开SSH连接)"
     echo "0) 退出"
     echo
 }
@@ -119,12 +120,21 @@ cleanup_k3s() {
     ip link delete cni0 2>/dev/null || true
     ip link delete flannel.1 2>/dev/null || true
     
-    # 清理iptables规则
-    print_info "清理iptables规则..."
-    iptables -F || true
-    iptables -X || true
-    iptables -t nat -F || true
-    iptables -t nat -X || true
+    # 清理K3s相关的iptables规则 (保留SSH和基础规则)
+    print_info "清理K3s相关的iptables规则..."
+    print_warning "保留SSH和基础网络规则，仅清理K3s相关规则"
+
+    # 仅清理K3s相关的链，不清理所有规则
+    iptables -t nat -D POSTROUTING -s 10.42.0.0/16 -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -s 10.43.0.0/16 -j MASQUERADE 2>/dev/null || true
+
+    # 清理K3s相关的自定义链 (如果存在)
+    iptables -F KUBE-SERVICES 2>/dev/null || true
+    iptables -F KUBE-NODEPORTS 2>/dev/null || true
+    iptables -F KUBE-POSTROUTING 2>/dev/null || true
+    iptables -F KUBE-MARK-MASQ 2>/dev/null || true
+
+    print_warning "注意: 已保留SSH和系统基础iptables规则"
     
     print_success "K3s集群清理完成"
 }
@@ -272,17 +282,18 @@ cleanup_temp_files() {
     print_success "临时文件清理完成"
 }
 
-# 完全清理
+# 安全的完全清理 (保留SSH连接)
 cleanup_all() {
     print_warning "执行完全清理..."
     print_warning "这将删除所有ESS相关组件和数据！"
-    
+    print_info "注意: 将保留SSH连接和基础网络规则"
+
     read -p "确定要继续吗? [y/N]: " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         print_info "取消清理"
         return
     fi
-    
+
     cleanup_ess
     cleanup_k3s
     cleanup_nginx
@@ -293,6 +304,44 @@ cleanup_all() {
     cleanup_temp_files
 
     print_success "完全清理完成"
+    print_info "SSH连接和基础网络功能已保留"
+}
+
+# 危险的完全清理 (可能断开SSH)
+cleanup_all_dangerous() {
+    print_error "危险操作警告！"
+    print_error "此操作将清理所有iptables规则，可能导致SSH连接断开！"
+    print_error "建议仅在本地控制台执行此操作！"
+
+    read -p "您确定要执行危险清理吗? 输入 'DANGEROUS' 确认: " confirm
+    if [[ "$confirm" != "DANGEROUS" ]]; then
+        print_info "取消危险清理"
+        return
+    fi
+
+    cleanup_ess
+
+    # 危险的K3s清理 (包含完全清理iptables)
+    print_warning "执行危险的K3s清理..."
+    systemctl stop k3s || true
+    systemctl disable k3s || true
+
+    # 完全清理iptables (危险!)
+    print_error "清理所有iptables规则 (可能断开SSH)..."
+    iptables -F || true
+    iptables -X || true
+    iptables -t nat -F || true
+    iptables -t nat -X || true
+
+    cleanup_nginx
+    cleanup_ssl
+    cleanup_systemd_services
+    cleanup_install_dir
+    cleanup_config_files
+    cleanup_temp_files
+
+    print_success "危险清理完成"
+    print_warning "如果SSH连接断开，请通过控制台重新连接"
 }
 
 # 快速清理 (保留证书和配置)
@@ -310,7 +359,7 @@ quick_cleanup() {
 main_menu() {
     while true; do
         show_cleanup_options
-        read -p "请选择 [0-9]: " choice
+        read -p "请选择 [0-9,d]: " choice
 
         case "$choice" in
             "1")
@@ -340,6 +389,9 @@ main_menu() {
             "9")
                 cleanup_all
                 ;;
+            "d"|"D")
+                cleanup_all_dangerous
+                ;;
             "0")
                 print_info "退出清理工具"
                 exit 0
@@ -361,9 +413,10 @@ show_help() {
     echo "用法:"
     echo "  $0                    # 交互式菜单"
     echo "  $0 quick             # 快速清理 (保留证书)"
-    echo "  $0 all               # 完全清理"
+    echo "  $0 all               # 安全完全清理 (保留SSH)"
+    echo "  $0 dangerous         # 危险完全清理 (可能断开SSH)"
     echo "  $0 ess               # 仅清理ESS部署"
-    echo "  $0 k3s               # 仅清理K3s"
+    echo "  $0 k3s               # 仅清理K3s (安全模式)"
     echo "  $0 nginx             # 仅清理Nginx"
     echo "  $0 ssl               # 仅清理SSL证书"
     echo "  $0 config            # 仅清理配置文件"
@@ -383,6 +436,9 @@ main() {
             ;;
         "all")
             cleanup_all
+            ;;
+        "dangerous")
+            cleanup_all_dangerous
             ;;
         "ess")
             cleanup_ess
