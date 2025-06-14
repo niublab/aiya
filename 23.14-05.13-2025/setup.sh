@@ -253,17 +253,17 @@ interactive_configuration() {
         log "INFO" "使用现有域名: $DOMAIN"
     fi
 
-    # 2. 子域名配置
+    # 2. 子域名配置 (符合官方规范)
     echo
-    log "INFO" "2. 子域名配置 (留空使用默认值)"
-    read -p "Element Web子域名 [app]: " user_app_subdomain
-    export APP_SUBDOMAIN="${user_app_subdomain:-app}"
+    log "INFO" "2. 子域名配置 (留空使用官方推荐默认值)"
+    read -p "Element Web子域名 [chat]: " user_web_subdomain
+    export WEB_SUBDOMAIN="${user_web_subdomain:-chat}"
 
-    read -p "MAS子域名 [mas]: " user_mas_subdomain
-    export MAS_SUBDOMAIN="${user_mas_subdomain:-mas}"
+    read -p "认证服务子域名 [account]: " user_auth_subdomain
+    export AUTH_SUBDOMAIN="${user_auth_subdomain:-account}"
 
-    read -p "RTC子域名 [rtc]: " user_rtc_subdomain
-    export RTC_SUBDOMAIN="${user_rtc_subdomain:-rtc}"
+    read -p "RTC子域名 [mrtc]: " user_rtc_subdomain
+    export RTC_SUBDOMAIN="${user_rtc_subdomain:-mrtc}"
 
     read -p "Matrix服务器子域名 [matrix]: " user_matrix_subdomain
     export MATRIX_SUBDOMAIN="${user_matrix_subdomain:-matrix}"
@@ -409,7 +409,7 @@ interactive_configuration() {
     echo
     log "SUCCESS" "=== 配置摘要 ==="
     log "INFO" "主域名: $DOMAIN"
-    log "INFO" "子域名: ${APP_SUBDOMAIN:-app}.$DOMAIN, ${MAS_SUBDOMAIN:-mas}.$DOMAIN, ${RTC_SUBDOMAIN:-rtc}.$DOMAIN, ${MATRIX_SUBDOMAIN:-matrix}.$DOMAIN"
+    log "INFO" "子域名: ${WEB_SUBDOMAIN:-chat}.$DOMAIN, ${AUTH_SUBDOMAIN:-account}.$DOMAIN, ${RTC_SUBDOMAIN:-mrtc}.$DOMAIN, ${MATRIX_SUBDOMAIN:-matrix}.$DOMAIN"
     log "INFO" "安装目录: ${INSTALL_DIR:-/opt/matrix-ess}"
     log "INFO" "命名空间: ${NAMESPACE:-ess}"
     log "INFO" "端口: HTTP=${HTTP_PORT:-8080}, HTTPS=${HTTPS_PORT:-8443}, 联邦=${FEDERATION_PORT:-8448}"

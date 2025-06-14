@@ -33,8 +33,25 @@ WEBRTC_TCP_PORT="${WEBRTC_TCP_PORT:-30881}"
 WEBRTC_UDP_PORT="${WEBRTC_UDP_PORT:-30882}"
 WEBRTC_UDP_RANGE_START="${WEBRTC_UDP_RANGE_START:-30152}"
 WEBRTC_UDP_RANGE_END="${WEBRTC_UDP_RANGE_END:-30352}"
+
+# 路径配置 (避免硬编码)
 INSTALL_DIR="${INSTALL_DIR:-/opt/matrix-ess}"
 NAMESPACE="${NAMESPACE:-ess}"
+DATA_DIR="${DATA_DIR:-/var/lib/matrix-ess}"
+LOG_DIR="${LOG_DIR:-/var/log/matrix-ess}"
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/matrix-ess}"
+NGINX_CONFIG_DIR="${NGINX_CONFIG_DIR:-/etc/nginx}"
+NGINX_SITES_AVAILABLE="${NGINX_SITES_AVAILABLE:-$NGINX_CONFIG_DIR/sites-available}"
+NGINX_SITES_ENABLED="${NGINX_SITES_ENABLED:-$NGINX_CONFIG_DIR/sites-enabled}"
+LETSENCRYPT_DIR="${LETSENCRYPT_DIR:-/etc/letsencrypt}"
+K3S_CONFIG_DIR="${K3S_CONFIG_DIR:-/etc/rancher/k3s}"
+K3S_DATA_DIR="${K3S_DATA_DIR:-/var/lib/rancher/k3s}"
+
+# 子域名配置 (符合官方规范)
+WEB_SUBDOMAIN="${WEB_SUBDOMAIN:-chat}"
+AUTH_SUBDOMAIN="${AUTH_SUBDOMAIN:-account}"
+RTC_SUBDOMAIN="${RTC_SUBDOMAIN:-mrtc}"
+MATRIX_SUBDOMAIN="${MATRIX_SUBDOMAIN:-matrix}"
 
 # 验证关键配置
 validate_config() {
@@ -306,7 +323,7 @@ check_existing_certificate() {
 
         # 检查证书是否包含所有需要的域名
         local cert_domains=$(openssl x509 -in "/etc/letsencrypt/live/$domain/fullchain.pem" -noout -text | grep -A1 "Subject Alternative Name" | tail -1 | tr ',' '\n' | grep DNS | cut -d: -f2 | tr -d ' ')
-        local required_domains=("$DOMAIN" "app.$DOMAIN" "mas.$DOMAIN" "rtc.$DOMAIN" "matrix.$DOMAIN")
+        local required_domains=("$DOMAIN" "$WEB_SUBDOMAIN.$DOMAIN" "$AUTH_SUBDOMAIN.$DOMAIN" "$RTC_SUBDOMAIN.$DOMAIN" "$MATRIX_SUBDOMAIN.$DOMAIN")
         local missing_domains=()
 
         for req_domain in "${required_domains[@]}"; do
@@ -579,7 +596,8 @@ precheck_dns_config() {
 
     # 检查域名解析
     print_info "检查域名解析..."
-    for subdomain in "" "app." "mas." "rtc." "matrix."; do
+    local subdomains=("" "$WEB_SUBDOMAIN." "$AUTH_SUBDOMAIN." "$RTC_SUBDOMAIN." "$MATRIX_SUBDOMAIN.")
+    for subdomain in "${subdomains[@]}"; do
         local full_domain="${subdomain}${DOMAIN}"
         if dig +short "$full_domain" @8.8.8.8 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' > /dev/null; then
             print_success "域名解析正常: $full_domain"
@@ -628,10 +646,10 @@ generate_letsencrypt_cert() {
             "--no-eff-email"
             "--email" "$email"
             "-d" "$DOMAIN"
-            "-d" "app.$DOMAIN"
-            "-d" "mas.$DOMAIN"
-            "-d" "rtc.$DOMAIN"
-            "-d" "matrix.$DOMAIN"
+            "-d" "$WEB_SUBDOMAIN.$DOMAIN"
+            "-d" "$AUTH_SUBDOMAIN.$DOMAIN"
+            "-d" "$RTC_SUBDOMAIN.$DOMAIN"
+            "-d" "$MATRIX_SUBDOMAIN.$DOMAIN"
         )
 
         # 添加DNS插件参数
@@ -699,10 +717,10 @@ generate_letsencrypt_cert() {
             "--no-eff-email"
             "--email" "$email"
             "-d" "$DOMAIN"
-            "-d" "app.$DOMAIN"
-            "-d" "mas.$DOMAIN"
-            "-d" "rtc.$DOMAIN"
-            "-d" "matrix.$DOMAIN"
+            "-d" "$WEB_SUBDOMAIN.$DOMAIN"
+            "-d" "$AUTH_SUBDOMAIN.$DOMAIN"
+            "-d" "$RTC_SUBDOMAIN.$DOMAIN"
+            "-d" "$MATRIX_SUBDOMAIN.$DOMAIN"
         )
 
         # 添加staging标志
@@ -828,22 +846,22 @@ configure_nginx() {
     mkdir -p "$INSTALL_DIR"
     
     # 生成Nginx配置
-    cat > /etc/nginx/sites-available/matrix-ess << EOF
+    cat > "$NGINX_SITES_AVAILABLE/matrix-ess" << EOF
 # HTTP重定向到HTTPS
 server {
     listen $HTTP_PORT;
-    server_name $DOMAIN app.$DOMAIN mas.$DOMAIN rtc.$DOMAIN matrix.$DOMAIN;
+    server_name $DOMAIN $WEB_SUBDOMAIN.$DOMAIN $AUTH_SUBDOMAIN.$DOMAIN $RTC_SUBDOMAIN.$DOMAIN $MATRIX_SUBDOMAIN.$DOMAIN;
     return 301 https://\$host:$HTTPS_PORT\$request_uri;
 }
 
 # 主HTTPS服务
 server {
     listen $HTTPS_PORT ssl http2;
-    server_name $DOMAIN app.$DOMAIN mas.$DOMAIN rtc.$DOMAIN matrix.$DOMAIN;
+    server_name $DOMAIN $WEB_SUBDOMAIN.$DOMAIN $AUTH_SUBDOMAIN.$DOMAIN $RTC_SUBDOMAIN.$DOMAIN $MATRIX_SUBDOMAIN.$DOMAIN;
 
     # SSL配置
-    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+    ssl_certificate $LETSENCRYPT_DIR/live/$DOMAIN/fullchain.pem;
+    ssl_certificate_key $LETSENCRYPT_DIR/live/$DOMAIN/privkey.pem;
     
     # SSL安全配置
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -901,7 +919,7 @@ server {
 EOF
     
     # 启用站点
-    ln -sf /etc/nginx/sites-available/matrix-ess /etc/nginx/sites-enabled/
+    ln -sf "$NGINX_SITES_AVAILABLE/matrix-ess" "$NGINX_SITES_ENABLED/"
     
     # 删除默认站点
     rm -f /etc/nginx/sites-enabled/default
@@ -930,22 +948,22 @@ ingress:
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
 
-# Element Web配置
+# Element Web配置 (官方推荐使用chat子域名)
 elementWeb:
   ingress:
-    host: "app.$DOMAIN"
+    host: "$WEB_SUBDOMAIN.$DOMAIN"
     tlsEnabled: false
 
-# Matrix Authentication Service配置
+# Matrix Authentication Service配置 (官方推荐使用account子域名)
 matrixAuthenticationService:
   ingress:
-    host: "mas.$DOMAIN"
+    host: "$AUTH_SUBDOMAIN.$DOMAIN"
     tlsEnabled: false
 
-# Matrix RTC配置
+# Matrix RTC配置 (官方推荐使用mrtc子域名)
 matrixRTC:
   ingress:
-    host: "rtc.$DOMAIN"
+    host: "$RTC_SUBDOMAIN.$DOMAIN"
     tlsEnabled: false
   sfu:
     exposedServices:
@@ -961,8 +979,11 @@ matrixRTC:
 # Synapse配置
 synapse:
   ingress:
-    host: "matrix.$DOMAIN"
+    host: "$MATRIX_SUBDOMAIN.$DOMAIN"
     tlsEnabled: false
+  wellKnownDelegation:
+    enabled: true
+    serverName: "$DOMAIN"
 
 # Well-known配置
 wellKnownDelegation:
