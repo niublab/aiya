@@ -1101,12 +1101,10 @@ synapse:
   ingress:
     host: "$MATRIX_SUBDOMAIN.$DOMAIN"
     tlsEnabled: false
-  wellKnownDelegation:
-    enabled: true
-    serverName: "$DOMAIN"
 
 # Well-known配置
 wellKnownDelegation:
+  enabled: true
   ingress:
     host: "$DOMAIN"
     tlsEnabled: false
