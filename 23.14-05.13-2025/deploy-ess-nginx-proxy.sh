@@ -996,6 +996,383 @@ EOF
     print_success "ESS配置生成完成"
 }
 
+# 后处理ESS配置文件 (修复端口问题)
+post_process_ess_config() {
+    print_info "后处理ESS配置文件..."
+
+    # 等待Pod完全启动
+    local retry=0
+    while [[ $retry -lt 20 ]]; do
+        if kubectl get pods -n "$NAMESPACE" | grep -E "(Running|Completed)" | wc -l | grep -q "[3-9]"; then
+            print_success "ESS Pod已启动"
+            break
+        fi
+        sleep 15
+        ((retry++))
+        print_info "等待ESS Pod启动... ($retry/20)"
+    done
+
+    # 修复MAS配置中的重定向URL
+    fix_mas_redirect_urls
+
+    # 修复Synapse配置中的well-known URL
+    fix_synapse_wellknown_urls
+
+    # 修复Element Web配置中的服务器URL
+    fix_element_web_config
+
+    # 修复Nginx well-known配置
+    fix_nginx_wellknown_config
+
+    # 修复其他可能的配置文件
+    fix_additional_configs
+
+    # 重启相关服务以应用配置更改
+    restart_ess_services
+
+    # 验证配置修复效果
+    verify_config_fixes
+
+    print_success "ESS配置文件后处理完成"
+}
+
+# 修复MAS重定向URL
+fix_mas_redirect_urls() {
+    print_info "修复MAS重定向URL..."
+
+    # 获取MAS ConfigMap
+    local mas_config_name=$(kubectl get configmap -n "$NAMESPACE" -o name | grep mas | head -1)
+    if [[ -n "$mas_config_name" ]]; then
+        # 备份原配置
+        kubectl get "$mas_config_name" -n "$NAMESPACE" -o yaml > "$INSTALL_DIR/mas-config-backup.yaml"
+
+        # 提取配置内容
+        kubectl get "$mas_config_name" -n "$NAMESPACE" -o jsonpath='{.data.config\.yaml}' > "$INSTALL_DIR/mas-config.yaml"
+
+        # 修复重定向URL中的端口
+        sed -i "s|https://$AUTH_SUBDOMAIN\\.$DOMAIN/|https://$AUTH_SUBDOMAIN.$DOMAIN:$HTTPS_PORT/|g" "$INSTALL_DIR/mas-config.yaml"
+        sed -i "s|https://$WEB_SUBDOMAIN\\.$DOMAIN/|https://$WEB_SUBDOMAIN.$DOMAIN:$HTTPS_PORT/|g" "$INSTALL_DIR/mas-config.yaml"
+        sed -i "s|https://$DOMAIN/|https://$DOMAIN:$HTTPS_PORT/|g" "$INSTALL_DIR/mas-config.yaml"
+
+        # 更新ConfigMap
+        kubectl create configmap "${mas_config_name#configmap/}" \
+            --from-file=config.yaml="$INSTALL_DIR/mas-config.yaml" \
+            --dry-run=client -o yaml | kubectl apply -n "$NAMESPACE" -f -
+
+        print_success "MAS重定向URL已修复"
+    else
+        print_warning "未找到MAS ConfigMap"
+    fi
+}
+
+# 修复Synapse well-known URL
+fix_synapse_wellknown_urls() {
+    print_info "修复Synapse well-known URL..."
+
+    # 获取Synapse ConfigMap
+    local synapse_config_name=$(kubectl get configmap -n "$NAMESPACE" -o name | grep synapse | head -1)
+    if [[ -n "$synapse_config_name" ]]; then
+        # 备份原配置
+        kubectl get "$synapse_config_name" -n "$NAMESPACE" -o yaml > "$INSTALL_DIR/synapse-config-backup.yaml"
+
+        # 提取配置内容
+        kubectl get "$synapse_config_name" -n "$NAMESPACE" -o jsonpath='{.data.homeserver\.yaml}' > "$INSTALL_DIR/synapse-config.yaml"
+
+        # 修复well-known URL中的端口
+        sed -i "s|https://$MATRIX_SUBDOMAIN\\.$DOMAIN/|https://$MATRIX_SUBDOMAIN.$DOMAIN:$HTTPS_PORT/|g" "$INSTALL_DIR/synapse-config.yaml"
+        sed -i "s|https://$DOMAIN/|https://$DOMAIN:$HTTPS_PORT/|g" "$INSTALL_DIR/synapse-config.yaml"
+
+        # 修复联邦端口配置
+        sed -i "s|:8448|:$FEDERATION_PORT|g" "$INSTALL_DIR/synapse-config.yaml"
+
+        # 更新ConfigMap
+        kubectl create configmap "${synapse_config_name#configmap/}" \
+            --from-file=homeserver.yaml="$INSTALL_DIR/synapse-config.yaml" \
+            --dry-run=client -o yaml | kubectl apply -n "$NAMESPACE" -f -
+
+        print_success "Synapse well-known URL已修复"
+    else
+        print_warning "未找到Synapse ConfigMap"
+    fi
+}
+
+# 修复Element Web配置
+fix_element_web_config() {
+    print_info "修复Element Web配置..."
+
+    # 获取Element Web ConfigMap
+    local element_config_name=$(kubectl get configmap -n "$NAMESPACE" -o name | grep element | head -1)
+    if [[ -n "$element_config_name" ]]; then
+        # 备份原配置
+        kubectl get "$element_config_name" -n "$NAMESPACE" -o yaml > "$INSTALL_DIR/element-config-backup.yaml"
+
+        # 提取配置内容
+        kubectl get "$element_config_name" -n "$NAMESPACE" -o jsonpath='{.data.config\.json}' > "$INSTALL_DIR/element-config.json"
+
+        # 修复服务器URL中的端口
+        sed -i "s|\"https://$MATRIX_SUBDOMAIN\\.$DOMAIN/\"|\"https://$MATRIX_SUBDOMAIN.$DOMAIN:$HTTPS_PORT/\"|g" "$INSTALL_DIR/element-config.json"
+        sed -i "s|\"https://$AUTH_SUBDOMAIN\\.$DOMAIN/\"|\"https://$AUTH_SUBDOMAIN.$DOMAIN:$HTTPS_PORT/\"|g" "$INSTALL_DIR/element-config.json"
+        sed -i "s|\"https://$DOMAIN/\"|\"https://$DOMAIN:$HTTPS_PORT/\"|g" "$INSTALL_DIR/element-config.json"
+
+        # 更新ConfigMap
+        kubectl create configmap "${element_config_name#configmap/}" \
+            --from-file=config.json="$INSTALL_DIR/element-config.json" \
+            --dry-run=client -o yaml | kubectl apply -n "$NAMESPACE" -f -
+
+        print_success "Element Web配置已修复"
+    else
+        print_warning "未找到Element Web ConfigMap"
+    fi
+}
+
+# 修复Nginx well-known配置
+fix_nginx_wellknown_config() {
+    print_info "修复Nginx well-known配置..."
+
+    local nginx_config="$NGINX_SITES_AVAILABLE/matrix-ess"
+
+    if [[ -f "$nginx_config" ]]; then
+        # 备份原配置
+        local backup_suffix=$(date +%Y%m%d_%H%M%S)
+        cp "$nginx_config" "$nginx_config.backup.$backup_suffix"
+
+        # 创建临时配置文件
+        local temp_config="/tmp/nginx-matrix-ess-temp"
+
+        # 修复well-known重定向中的端口
+        sed "s|https://$MATRIX_SUBDOMAIN\\.$DOMAIN/|https://$MATRIX_SUBDOMAIN.$DOMAIN:$HTTPS_PORT/|g" "$nginx_config" > "$temp_config"
+        sed -i "s|https://$DOMAIN/|https://$DOMAIN:$HTTPS_PORT/|g" "$temp_config"
+
+        # 确保联邦端口正确
+        sed -i "s|:8448|:$FEDERATION_PORT|g" "$temp_config"
+
+        # 添加特殊的well-known处理 (如果不存在)
+        if ! grep -q "location.*well-known.*matrix" "$temp_config"; then
+            # 在server块中添加well-known处理
+            sed -i '/location \/ {/i\
+    # Matrix well-known endpoints\
+    location /.well-known/matrix/server {\
+        return 200 '\''{"m.server": "'"$MATRIX_SUBDOMAIN.$DOMAIN:$FEDERATION_PORT"'"}'\'';\
+        add_header Content-Type application/json;\
+        add_header Access-Control-Allow-Origin *;\
+    }\
+\
+    location /.well-known/matrix/client {\
+        return 200 '\''{"m.homeserver": {"base_url": "https://'"$MATRIX_SUBDOMAIN.$DOMAIN:$HTTPS_PORT"'/"}, "m.identity_server": {"base_url": "https://vector.im"}}'\'';\
+        add_header Content-Type application/json;\
+        add_header Access-Control-Allow-Origin *;\
+    }\
+' "$temp_config"
+        fi
+
+        # 应用修改后的配置
+        mv "$temp_config" "$nginx_config"
+
+        # 测试Nginx配置
+        if nginx -t; then
+            # 重新加载Nginx配置
+            systemctl reload nginx
+            print_success "Nginx well-known配置已修复并重新加载"
+        else
+            print_error "Nginx配置测试失败，恢复备份"
+            mv "$nginx_config.backup.$backup_suffix" "$nginx_config"
+            systemctl reload nginx
+        fi
+    else
+        print_warning "未找到Nginx配置文件: $nginx_config"
+    fi
+}
+
+# 修复其他可能的配置文件
+fix_additional_configs() {
+    print_info "检查并修复其他配置文件..."
+
+    # 修复所有Secret中可能包含的URL
+    fix_secrets_urls
+
+    # 修复所有Service中的端口配置
+    fix_service_ports
+
+    # 修复Ingress配置 (如果存在)
+    fix_ingress_configs
+
+    print_success "其他配置文件检查完成"
+}
+
+# 修复Secret中的URL
+fix_secrets_urls() {
+    print_info "修复Secret中的URL..."
+
+    # 获取所有包含URL的Secret
+    local secrets=$(kubectl get secrets -n "$NAMESPACE" -o name)
+
+    for secret in $secrets; do
+        # 检查Secret是否包含URL配置
+        if kubectl get "$secret" -n "$NAMESPACE" -o yaml | grep -q "https://"; then
+            print_info "检查Secret: $secret"
+
+            # 备份Secret
+            kubectl get "$secret" -n "$NAMESPACE" -o yaml > "$INSTALL_DIR/$(basename $secret)-backup.yaml"
+
+            # 提取并修复Secret数据 (这里需要小心处理base64编码)
+            # 注意: 实际实现中需要解码、修改、重新编码
+            print_info "Secret $secret 可能需要手动检查"
+        fi
+    done
+}
+
+# 修复Service端口配置
+fix_service_ports() {
+    print_info "检查Service端口配置..."
+
+    # 检查是否有Service使用了错误的端口
+    local services=$(kubectl get svc -n "$NAMESPACE" -o name)
+
+    for service in $services; do
+        # 检查Service端口配置
+        local service_ports=$(kubectl get "$service" -n "$NAMESPACE" -o jsonpath='{.spec.ports[*].port}')
+        print_info "Service $service 端口: $service_ports"
+    done
+}
+
+# 修复Ingress配置
+fix_ingress_configs() {
+    print_info "检查Ingress配置..."
+
+    # 获取所有Ingress
+    local ingresses=$(kubectl get ingress -n "$NAMESPACE" -o name 2>/dev/null || true)
+
+    if [[ -n "$ingresses" ]]; then
+        for ingress in $ingresses; do
+            print_info "检查Ingress: $ingress"
+
+            # 备份Ingress配置
+            kubectl get "$ingress" -n "$NAMESPACE" -o yaml > "$INSTALL_DIR/$(basename $ingress)-backup.yaml"
+
+            # 检查是否需要修复主机名或端口
+            local hosts=$(kubectl get "$ingress" -n "$NAMESPACE" -o jsonpath='{.spec.rules[*].host}')
+            print_info "Ingress $ingress 主机: $hosts"
+        done
+    else
+        print_info "未找到Ingress配置"
+    fi
+}
+
+# 重启ESS服务以应用配置更改
+restart_ess_services() {
+    print_info "重启ESS服务以应用配置更改..."
+
+    # 重启MAS
+    if kubectl get deployment -n "$NAMESPACE" | grep -q mas; then
+        kubectl rollout restart deployment -n "$NAMESPACE" -l app.kubernetes.io/component=matrix-authentication-service
+        print_info "已重启MAS服务"
+    fi
+
+    # 重启Synapse
+    if kubectl get deployment -n "$NAMESPACE" | grep -q synapse; then
+        kubectl rollout restart deployment -n "$NAMESPACE" -l app.kubernetes.io/component=synapse
+        print_info "已重启Synapse服务"
+    fi
+
+    # 重启Element Web
+    if kubectl get deployment -n "$NAMESPACE" | grep -q element; then
+        kubectl rollout restart deployment -n "$NAMESPACE" -l app.kubernetes.io/component=element-web
+        print_info "已重启Element Web服务"
+    fi
+
+    # 等待服务重启完成
+    print_info "等待服务重启完成..."
+    sleep 30
+
+    # 验证服务状态
+    kubectl get pods -n "$NAMESPACE"
+
+    print_success "ESS服务重启完成"
+}
+
+# 验证配置修复效果
+verify_config_fixes() {
+    print_info "验证配置修复效果..."
+
+    # 测试well-known端点
+    test_wellknown_endpoints
+
+    # 测试重定向URL
+    test_redirect_urls
+
+    # 检查服务健康状态
+    check_service_health
+
+    print_success "配置修复验证完成"
+}
+
+# 测试well-known端点
+test_wellknown_endpoints() {
+    print_info "测试well-known端点..."
+
+    # 测试Matrix服务器发现
+    local server_response=$(curl -s -k "https://localhost:$HTTPS_PORT/.well-known/matrix/server" 2>/dev/null || echo "")
+    if [[ "$server_response" == *"$MATRIX_SUBDOMAIN.$DOMAIN:$FEDERATION_PORT"* ]]; then
+        print_success "Matrix服务器发现端点正确"
+    else
+        print_warning "Matrix服务器发现端点可能有问题"
+        print_info "响应: $server_response"
+    fi
+
+    # 测试Matrix客户端配置
+    local client_response=$(curl -s -k "https://localhost:$HTTPS_PORT/.well-known/matrix/client" 2>/dev/null || echo "")
+    if [[ "$client_response" == *"$MATRIX_SUBDOMAIN.$DOMAIN:$HTTPS_PORT"* ]]; then
+        print_success "Matrix客户端配置端点正确"
+    else
+        print_warning "Matrix客户端配置端点可能有问题"
+        print_info "响应: $client_response"
+    fi
+}
+
+# 测试重定向URL
+test_redirect_urls() {
+    print_info "测试重定向URL..."
+
+    # 测试HTTP到HTTPS重定向
+    local redirect_response=$(curl -s -I "http://localhost:$HTTP_PORT" 2>/dev/null | head -1 || echo "")
+    if [[ "$redirect_response" == *"301"* ]] || [[ "$redirect_response" == *"302"* ]]; then
+        print_success "HTTP重定向正常"
+    else
+        print_warning "HTTP重定向可能有问题"
+    fi
+
+    # 测试各子域名访问
+    for subdomain in "$WEB_SUBDOMAIN" "$AUTH_SUBDOMAIN" "$MATRIX_SUBDOMAIN"; do
+        local response=$(curl -s -k -I "https://localhost:$HTTPS_PORT" -H "Host: $subdomain.$DOMAIN" 2>/dev/null | head -1 || echo "")
+        if [[ "$response" == *"200"* ]] || [[ "$response" == *"301"* ]] || [[ "$response" == *"302"* ]]; then
+            print_success "$subdomain.$DOMAIN 访问正常"
+        else
+            print_warning "$subdomain.$DOMAIN 访问可能有问题"
+        fi
+    done
+}
+
+# 检查服务健康状态
+check_service_health() {
+    print_info "检查服务健康状态..."
+
+    # 检查Pod状态
+    local running_pods=$(kubectl get pods -n "$NAMESPACE" --no-headers | grep Running | wc -l)
+    local total_pods=$(kubectl get pods -n "$NAMESPACE" --no-headers | wc -l)
+
+    print_info "运行中的Pod: $running_pods/$total_pods"
+
+    if [[ $running_pods -eq $total_pods ]]; then
+        print_success "所有Pod运行正常"
+    else
+        print_warning "部分Pod可能有问题"
+        kubectl get pods -n "$NAMESPACE"
+    fi
+
+    # 检查服务端点
+    kubectl get endpoints -n "$NAMESPACE"
+}
+
 # 部署ESS
 deploy_ess() {
     print_info "部署ESS..."
@@ -1083,6 +1460,13 @@ deploy_ess() {
         --wait --timeout=15m \
         --debug; then
         print_success "ESS部署完成"
+
+        # 等待配置文件生成
+        print_info "等待ESS配置文件生成..."
+        sleep 30
+
+        # 后处理ESS配置文件
+        post_process_ess_config
     else
         print_error "ESS部署失败"
         print_info "检查部署状态:"
