@@ -47,10 +47,10 @@ LETSENCRYPT_DIR="${LETSENCRYPT_DIR:-/etc/letsencrypt}"
 K3S_CONFIG_DIR="${K3S_CONFIG_DIR:-/etc/rancher/k3s}"
 K3S_DATA_DIR="${K3S_DATA_DIR:-/var/lib/rancher/k3s}"
 
-# 子域名配置 (符合官方规范)
-WEB_SUBDOMAIN="${WEB_SUBDOMAIN:-chat}"
-AUTH_SUBDOMAIN="${AUTH_SUBDOMAIN:-account}"
-RTC_SUBDOMAIN="${RTC_SUBDOMAIN:-mrtc}"
+# 子域名配置 (自定义环境)
+WEB_SUBDOMAIN="${WEB_SUBDOMAIN:-app}"
+AUTH_SUBDOMAIN="${AUTH_SUBDOMAIN:-mas}"
+RTC_SUBDOMAIN="${RTC_SUBDOMAIN:-rtc}"
 MATRIX_SUBDOMAIN="${MATRIX_SUBDOMAIN:-matrix}"
 
 # 验证关键配置
@@ -174,10 +174,10 @@ install_k3s() {
     fi
 
     # 创建K3s配置目录
-    mkdir -p /var/lib/rancher/k3s/server/manifests
+    mkdir -p "$K3S_DATA_DIR/server/manifests"
 
     # 创建Traefik配置
-    cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml << EOF
+    cat > "$K3S_DATA_DIR/server/manifests/traefik-config.yaml" << EOF
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -221,23 +221,24 @@ EOF
 
     # 等待kubeconfig文件生成
     local config_retry=0
-    while [[ ! -f "/etc/rancher/k3s/k3s.yaml" ]] && [[ $config_retry -lt 20 ]]; do
+    local kubeconfig_file="$K3S_CONFIG_DIR/k3s.yaml"
+    while [[ ! -f "$kubeconfig_file" ]] && [[ $config_retry -lt 20 ]]; do
         sleep 3
         ((config_retry++))
         print_info "等待kubeconfig生成... ($config_retry/20)"
     done
 
-    if [[ ! -f "/etc/rancher/k3s/k3s.yaml" ]]; then
-        print_error "kubeconfig文件未生成"
+    if [[ ! -f "$kubeconfig_file" ]]; then
+        print_error "kubeconfig文件未生成: $kubeconfig_file"
         exit 1
     fi
 
     # 复制配置到用户目录
-    cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+    cp "$kubeconfig_file" ~/.kube/config
     chmod 600 ~/.kube/config
 
     # 设置KUBECONFIG环境变量 (优先使用系统配置)
-    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+    export KUBECONFIG="$kubeconfig_file"
 
     # 验证kubectl连接
     print_info "验证kubectl连接..."
@@ -253,7 +254,7 @@ EOF
         print_info "检查K3s状态:"
         systemctl status k3s --no-pager
         print_info "检查kubeconfig:"
-        ls -la /etc/rancher/k3s/k3s.yaml
+        ls -la "$K3S_CONFIG_DIR/k3s.yaml"
         exit 1
     fi
 
@@ -277,7 +278,7 @@ fix_k3s_connection() {
     sleep 30
 
     # 重新设置kubeconfig
-    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+    export KUBECONFIG="$K3S_CONFIG_DIR/k3s.yaml"
 
     # 测试连接
     local fix_retry=0
@@ -310,11 +311,11 @@ check_existing_certificate() {
     local domain="$1"
 
     # 检查证书文件是否存在
-    if [[ -f "/etc/letsencrypt/live/$domain/fullchain.pem" ]]; then
+    if [[ -f "$LETSENCRYPT_DIR/live/$domain/fullchain.pem" ]]; then
         print_info "发现现有证书: $domain"
 
         # 检查证书有效期
-        local expiry_date=$(openssl x509 -in "/etc/letsencrypt/live/$domain/fullchain.pem" -noout -enddate | cut -d= -f2)
+        local expiry_date=$(openssl x509 -in "$LETSENCRYPT_DIR/live/$domain/fullchain.pem" -noout -enddate | cut -d= -f2)
         local expiry_timestamp=$(date -d "$expiry_date" +%s)
         local current_timestamp=$(date +%s)
         local days_until_expiry=$(( (expiry_timestamp - current_timestamp) / 86400 ))
@@ -322,7 +323,7 @@ check_existing_certificate() {
         print_info "证书有效期还有 $days_until_expiry 天"
 
         # 检查证书是否包含所有需要的域名
-        local cert_domains=$(openssl x509 -in "/etc/letsencrypt/live/$domain/fullchain.pem" -noout -text | grep -A1 "Subject Alternative Name" | tail -1 | tr ',' '\n' | grep DNS | cut -d: -f2 | tr -d ' ')
+        local cert_domains=$(openssl x509 -in "$LETSENCRYPT_DIR/live/$domain/fullchain.pem" -noout -text | grep -A1 "Subject Alternative Name" | tail -1 | tr ',' '\n' | grep DNS | cut -d: -f2 | tr -d ' ')
         local required_domains=("$DOMAIN" "$WEB_SUBDOMAIN.$DOMAIN" "$AUTH_SUBDOMAIN.$DOMAIN" "$RTC_SUBDOMAIN.$DOMAIN" "$MATRIX_SUBDOMAIN.$DOMAIN")
         local missing_domains=()
 
@@ -497,7 +498,7 @@ install_dns_plugins() {
 # 配置DNS验证凭据
 setup_dns_credentials() {
     local dns_provider="${DNS_PROVIDER:-cloudflare}"
-    local creds_dir="/etc/letsencrypt"
+    local creds_dir="$LETSENCRYPT_DIR"
 
     print_info "配置DNS验证凭据..."
 
@@ -656,17 +657,17 @@ generate_letsencrypt_cert() {
         case "$dns_provider" in
             "cloudflare")
                 certbot_args+=("--dns-cloudflare")
-                certbot_args+=("--dns-cloudflare-credentials" "/etc/letsencrypt/cloudflare.ini")
+                certbot_args+=("--dns-cloudflare-credentials" "$LETSENCRYPT_DIR/cloudflare.ini")
                 certbot_args+=("--dns-cloudflare-propagation-seconds" "60")
                 ;;
             "route53")
                 certbot_args+=("--dns-route53")
-                certbot_args+=("--dns-route53-credentials" "/etc/letsencrypt/route53.ini")
+                certbot_args+=("--dns-route53-credentials" "$LETSENCRYPT_DIR/route53.ini")
                 certbot_args+=("--dns-route53-propagation-seconds" "30")
                 ;;
             "digitalocean")
                 certbot_args+=("--dns-digitalocean")
-                certbot_args+=("--dns-digitalocean-credentials" "/etc/letsencrypt/digitalocean.ini")
+                certbot_args+=("--dns-digitalocean-credentials" "$LETSENCRYPT_DIR/digitalocean.ini")
                 certbot_args+=("--dns-digitalocean-propagation-seconds" "60")
                 ;;
             *)
@@ -744,7 +745,7 @@ generate_letsencrypt_cert() {
 
         # 显示证书信息
         print_info "证书信息:"
-        openssl x509 -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" -text -noout | grep -E "(Subject:|DNS:|Not After)"
+        openssl x509 -in "$LETSENCRYPT_DIR/live/$DOMAIN/fullchain.pem" -text -noout | grep -E "(Subject:|DNS:|Not After)"
 
     else
         local exit_code=$?
@@ -781,7 +782,7 @@ generate_letsencrypt_cert() {
             print_info "3. 检查DNS插件:"
             print_info "   certbot plugins"
             print_info "4. 手动测试DNS验证:"
-            print_info "   certbot certonly --dns-$dns_provider --dns-$dns_provider-credentials /etc/letsencrypt/$dns_provider.ini --dry-run -d $DOMAIN"
+            print_info "   certbot certonly --dns-$dns_provider --dns-$dns_provider-credentials $LETSENCRYPT_DIR/$dns_provider.ini --dry-run -d $DOMAIN"
         else
             print_info "HTTP验证问题排查:"
             print_info "1. 检查域名解析:"
@@ -811,7 +812,7 @@ use_custom_cert() {
 
     local custom_cert="${CUSTOM_CERT_PATH:-/etc/ssl/certs/$DOMAIN.crt}"
     local custom_key="${CUSTOM_KEY_PATH:-/etc/ssl/private/$DOMAIN.key}"
-    local cert_dir="/etc/letsencrypt/live/$DOMAIN"
+    local cert_dir="$LETSENCRYPT_DIR/live/$DOMAIN"
 
     # 检查证书文件是否存在
     if [[ ! -f "$custom_cert" ]]; then
@@ -903,10 +904,10 @@ server {
 # Matrix联邦端口
 server {
     listen $FEDERATION_PORT ssl http2;
-    server_name $DOMAIN matrix.$DOMAIN;
+    server_name $DOMAIN $MATRIX_SUBDOMAIN.$DOMAIN;
 
-    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+    ssl_certificate $LETSENCRYPT_DIR/live/$DOMAIN/fullchain.pem;
+    ssl_certificate_key $LETSENCRYPT_DIR/live/$DOMAIN/privkey.pem;
 
     location / {
         proxy_pass http://127.0.0.1:$HTTP_PORT;
@@ -948,19 +949,19 @@ ingress:
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
 
-# Element Web配置 (官方推荐使用chat子域名)
+# Element Web配置
 elementWeb:
   ingress:
     host: "$WEB_SUBDOMAIN.$DOMAIN"
     tlsEnabled: false
 
-# Matrix Authentication Service配置 (官方推荐使用account子域名)
+# Matrix Authentication Service配置
 matrixAuthenticationService:
   ingress:
     host: "$AUTH_SUBDOMAIN.$DOMAIN"
     tlsEnabled: false
 
-# Matrix RTC配置 (官方推荐使用mrtc子域名)
+# Matrix RTC配置
 matrixRTC:
   ingress:
     host: "$RTC_SUBDOMAIN.$DOMAIN"
@@ -1000,11 +1001,12 @@ deploy_ess() {
     print_info "部署ESS..."
 
     # 确保使用正确的kubeconfig
-    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+    local kubeconfig_file="$K3S_CONFIG_DIR/k3s.yaml"
+    export KUBECONFIG="$kubeconfig_file"
 
     # 验证kubeconfig文件存在
-    if [[ ! -f "/etc/rancher/k3s/k3s.yaml" ]]; then
-        print_error "K3s kubeconfig文件不存在: /etc/rancher/k3s/k3s.yaml"
+    if [[ ! -f "$kubeconfig_file" ]]; then
+        print_error "K3s kubeconfig文件不存在: $kubeconfig_file"
         print_info "检查K3s安装状态:"
         systemctl status k3s --no-pager
         exit 1
@@ -1017,7 +1019,7 @@ deploy_ess() {
         sleep 5
         ((kubectl_retry++))
         print_info "等待kubectl连接... ($kubectl_retry/10)"
-        export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+        export KUBECONFIG="$K3S_CONFIG_DIR/k3s.yaml"
     done
 
     if ! kubectl get nodes &>/dev/null; then
@@ -1113,9 +1115,9 @@ show_access_info() {
     print_success "=== ESS部署完成 ==="
     echo
     print_info "访问地址:"
-    echo "  Element Web: https://app.$DOMAIN:$HTTPS_PORT"
-    echo "  认证服务:    https://mas.$DOMAIN:$HTTPS_PORT"
-    echo "  Matrix服务器: https://matrix.$DOMAIN:$HTTPS_PORT"
+    echo "  Element Web: https://$WEB_SUBDOMAIN.$DOMAIN:$HTTPS_PORT"
+    echo "  认证服务:    https://$AUTH_SUBDOMAIN.$DOMAIN:$HTTPS_PORT"
+    echo "  Matrix服务器: https://$MATRIX_SUBDOMAIN.$DOMAIN:$HTTPS_PORT"
     echo
     print_info "管理命令:"
     echo "  查看Pod状态: kubectl get pods -n $NAMESPACE"
