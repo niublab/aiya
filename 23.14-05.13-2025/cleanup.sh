@@ -66,20 +66,20 @@ cleanup_ess() {
     
     if kubectl get nodes &>/dev/null; then
         # 删除ESS部署
-        if helm list -n ess | grep -q ess; then
+        if helm list -n "$NAMESPACE" | grep -q ess; then
             print_info "删除ESS Helm部署..."
-            helm uninstall ess -n ess || true
+            helm uninstall ess -n "$NAMESPACE" || true
         fi
-        
+
         # 删除命名空间
-        if kubectl get namespace ess &>/dev/null; then
-            print_info "删除ESS命名空间..."
-            kubectl delete namespace ess --timeout=60s || true
+        if kubectl get namespace "$NAMESPACE" &>/dev/null; then
+            print_info "删除ESS命名空间: $NAMESPACE"
+            kubectl delete namespace "$NAMESPACE" --timeout=60s || true
         fi
-        
+
         # 清理PVC (如果存在)
         print_info "清理持久卷声明..."
-        kubectl get pvc -A | grep ess | awk '{print $1 " " $2}' | while read ns pvc; do
+        kubectl get pvc -A | grep "$NAMESPACE" | awk '{print $1 " " $2}' | while read ns pvc; do
             kubectl delete pvc "$pvc" -n "$ns" || true
         done
         
@@ -298,9 +298,12 @@ cleanup_config_files() {
     rm -f nginx.conf.template
 
     # 清理生成的配置备份文件
-    rm -f "$INSTALL_DIR"/*-backup.yaml 2>/dev/null || true
-    rm -f "$INSTALL_DIR"/*.yaml 2>/dev/null || true
-    rm -f "$INSTALL_DIR"/*.json 2>/dev/null || true
+    if [[ -n "${INSTALL_DIR:-}" && -d "$INSTALL_DIR" ]]; then
+        rm -f "$INSTALL_DIR"/*-backup.yaml 2>/dev/null || true
+        rm -f "$INSTALL_DIR"/*.yaml 2>/dev/null || true
+        rm -f "$INSTALL_DIR"/*.json 2>/dev/null || true
+        print_info "清理安装目录配置文件: $INSTALL_DIR"
+    fi
 
     print_success "配置文件清理完成"
 }
@@ -471,9 +474,44 @@ show_help() {
     echo
 }
 
+# 初始化变量
+init_variables() {
+    # 设置默认变量
+    INSTALL_DIR="${INSTALL_DIR:-/opt/matrix-ess}"
+    NAMESPACE="${NAMESPACE:-ess}"
+    DOMAIN="${DOMAIN:-}"
+
+    # 从配置文件读取变量 (如果存在)
+    local config_files=(
+        "/opt/matrix-ess/ess-config-template.env"
+        "./ess-config-template.env"
+        "$HOME/ess-config-template.env"
+    )
+
+    for config_file in "${config_files[@]}"; do
+        if [[ -f "$config_file" ]]; then
+            print_info "从配置文件读取变量: $config_file"
+            source "$config_file" 2>/dev/null || true
+            break
+        fi
+    done
+
+    # 重新设置变量 (配置文件可能覆盖了默认值)
+    INSTALL_DIR="${INSTALL_DIR:-/opt/matrix-ess}"
+    NAMESPACE="${NAMESPACE:-ess}"
+
+    print_info "使用配置:"
+    print_info "  安装目录: $INSTALL_DIR"
+    print_info "  命名空间: $NAMESPACE"
+    if [[ -n "$DOMAIN" ]]; then
+        print_info "  域名: $DOMAIN"
+    fi
+}
+
 # 脚本入口
 main() {
     check_root
+    init_variables
     
     case "${1:-}" in
         "quick")
