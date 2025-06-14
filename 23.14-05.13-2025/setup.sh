@@ -224,108 +224,196 @@ configure_environment() {
                 ${EDITOR:-nano} ess-config-template.env
                 source ess-config-template.env
             else
-                # 提示用户手动设置关键变量
-                log "INFO" "请设置关键环境变量:"
+                # 完整的交互式配置
+                interactive_configuration
+            fi
+        fi
+    fi
+}
 
-                if [[ -z "${DOMAIN:-}" || "$DOMAIN" == "your-domain.com" ]]; then
-                    read -p "请输入您的域名 (例如: example.com): " user_domain
-                    if [[ -n "$user_domain" ]]; then
-                        export DOMAIN="$user_domain"
-                        log "SUCCESS" "域名设置为: $DOMAIN"
-                    else
-                        log "ERROR" "域名不能为空"
-                        exit 1
+# 完整的交互式配置
+interactive_configuration() {
+    log "INFO" "=== ESS部署交互式配置 ==="
+    echo
+
+    # 1. 主域名配置
+    log "INFO" "1. 域名配置"
+    if [[ -z "${DOMAIN:-}" || "$DOMAIN" == "your-domain.com" ]]; then
+        while true; do
+            read -p "主域名 (例: matrix.example.com): " user_domain
+            if [[ -n "$user_domain" && "$user_domain" != "your-domain.com" ]]; then
+                export DOMAIN="$user_domain"
+                log "SUCCESS" "主域名: $DOMAIN"
+                break
+            else
+                log "ERROR" "域名不能为空或使用默认值"
+            fi
+        done
+    else
+        log "INFO" "使用现有域名: $DOMAIN"
+    fi
+
+    # 2. 子域名配置
+    echo
+    log "INFO" "2. 子域名配置 (留空使用默认值)"
+    read -p "Element Web子域名 [app]: " user_app_subdomain
+    export APP_SUBDOMAIN="${user_app_subdomain:-app}"
+
+    read -p "MAS子域名 [mas]: " user_mas_subdomain
+    export MAS_SUBDOMAIN="${user_mas_subdomain:-mas}"
+
+    read -p "RTC子域名 [rtc]: " user_rtc_subdomain
+    export RTC_SUBDOMAIN="${user_rtc_subdomain:-rtc}"
+
+    read -p "Matrix服务器子域名 [matrix]: " user_matrix_subdomain
+    export MATRIX_SUBDOMAIN="${user_matrix_subdomain:-matrix}"
+
+    # 3. 部署路径配置
+    echo
+    log "INFO" "3. 部署路径配置"
+    read -p "安装目录 [/opt/matrix-ess]: " user_install_dir
+    export INSTALL_DIR="${user_install_dir:-/opt/matrix-ess}"
+
+    read -p "Kubernetes命名空间 [ess]: " user_namespace
+    export NAMESPACE="${user_namespace:-ess}"
+
+    # 4. 端口配置
+    echo
+    log "INFO" "4. 端口配置"
+    read -p "HTTP端口 [8080]: " user_http_port
+    export HTTP_PORT="${user_http_port:-8080}"
+
+    read -p "HTTPS端口 [8443]: " user_https_port
+    export HTTPS_PORT="${user_https_port:-8443}"
+
+    read -p "联邦端口 [8448]: " user_federation_port
+    export FEDERATION_PORT="${user_federation_port:-8448}"
+
+    # 5. 邮箱配置
+    echo
+    log "INFO" "5. 邮箱配置"
+    read -p "证书邮箱 [admin@$DOMAIN]: " user_cert_email
+    export CERT_EMAIL="${user_cert_email:-admin@$DOMAIN}"
+
+    read -p "管理员邮箱 [admin@$DOMAIN]: " user_admin_email
+    export ADMIN_EMAIL="${user_admin_email:-admin@$DOMAIN}"
+
+    # 6. SSL证书配置
+
+    echo
+    log "INFO" "6. SSL证书配置"
+    echo "证书验证方式:"
+    echo "  1) DNS验证 (推荐，无需开放80端口)"
+    echo "  2) HTTP验证 (需要80端口可访问)"
+    echo
+    read -p "请选择 [1-2]: " cert_challenge_choice
+
+    case "$cert_challenge_choice" in
+        "1")
+            export CERT_CHALLENGE="dns"
+            log "INFO" "已选择DNS验证"
+
+            # 询问DNS提供商
+            echo
+            log "INFO" "选择DNS提供商:"
+            echo "  1) Cloudflare (推荐)"
+            echo "  2) AWS Route53"
+            echo "  3) DigitalOcean"
+            echo
+            read -p "请选择 [1-3]: " dns_provider_choice
+
+            case "$dns_provider_choice" in
+                "1")
+                    export DNS_PROVIDER="cloudflare"
+                    log "INFO" "已选择Cloudflare DNS"
+
+                    if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+                        echo
+                        log "WARNING" "需要Cloudflare API Token"
+                        log "INFO" "获取地址: https://dash.cloudflare.com/profile/api-tokens"
+                        log "INFO" "权限需要: Zone:Zone:Read, Zone:DNS:Edit"
+                        read -p "请输入Cloudflare API Token: " cf_token
+                        if [[ -n "$cf_token" ]]; then
+                            export CLOUDFLARE_API_TOKEN="$cf_token"
+                            log "SUCCESS" "Cloudflare API Token已设置"
+                        else
+                            log "ERROR" "API Token不能为空"
+                            exit 1
+                        fi
                     fi
-                fi
+                    ;;
+                "2")
+                    export DNS_PROVIDER="route53"
+                    log "INFO" "已选择AWS Route53"
+                    log "WARNING" "请确保已配置AWS凭据"
+                    ;;
+                "3")
+                    export DNS_PROVIDER="digitalocean"
+                    log "INFO" "已选择DigitalOcean"
+                    log "WARNING" "请确保已设置DO_API_TOKEN环境变量"
+                    ;;
+                *)
+                    log "WARNING" "无效选择，使用默认Cloudflare"
+                    export DNS_PROVIDER="cloudflare"
+                    ;;
+            esac
+            ;;
+        "2")
+            export CERT_CHALLENGE="http"
+            log "INFO" "已选择HTTP验证"
+            log "WARNING" "请确保80端口可以从互联网访问"
+            ;;
+        *)
+            log "WARNING" "无效选择，使用默认DNS验证"
+            export CERT_CHALLENGE="dns"
+            export DNS_PROVIDER="cloudflare"
+            ;;
+    esac
 
-                if [[ -z "${HTTP_PORT:-}" ]]; then
-                    read -p "HTTP端口 [8080]: " user_http_port
-                    export HTTP_PORT="${user_http_port:-8080}"
-                fi
+    # 7. 高级配置 (可选)
+    echo
+    read -p "是否配置高级选项? [y/N]: " advanced_config
+    if [[ "$advanced_config" =~ ^[Yy]$ ]]; then
+        echo
+        log "INFO" "7. 高级配置"
 
-                if [[ -z "${HTTPS_PORT:-}" ]]; then
-                    read -p "HTTPS端口 [8443]: " user_https_port
-                    export HTTPS_PORT="${user_https_port:-8443}"
-                fi
+        read -p "DDNS域名 [ip.$DOMAIN]: " user_ddns_domain
+        export DDNS_DOMAIN="${user_ddns_domain:-ip.$DOMAIN}"
 
-                # 询问证书验证方式
-                echo
-                log "INFO" "选择SSL证书验证方式:"
-                echo "  1) DNS验证 (推荐，无需开放80端口)"
-                echo "  2) HTTP验证 (需要80端口可访问)"
-                echo
-                read -p "请选择 [1-2]: " cert_challenge_choice
+        read -p "告警邮箱 [alerts@$DOMAIN]: " user_alert_email
+        export ALERT_EMAIL="${user_alert_email:-alerts@$DOMAIN}"
 
-                case "$cert_challenge_choice" in
-                    "1")
-                        export CERT_CHALLENGE="dns"
-                        log "INFO" "已选择DNS验证"
+        read -p "启用调试模式? [y/N]: " enable_debug
+        if [[ "$enable_debug" =~ ^[Yy]$ ]]; then
+            export DEBUG="true"
+        fi
+    fi
 
-                        # 询问DNS提供商
-                        echo
-                        log "INFO" "选择DNS提供商:"
-                        echo "  1) Cloudflare (推荐)"
-                        echo "  2) AWS Route53"
-                        echo "  3) DigitalOcean"
-                        echo
-                        read -p "请选择 [1-3]: " dns_provider_choice
+    # 显示配置摘要
+    echo
+    log "SUCCESS" "=== 配置摘要 ==="
+    log "INFO" "主域名: $DOMAIN"
+    log "INFO" "子域名: ${APP_SUBDOMAIN:-app}.$DOMAIN, ${MAS_SUBDOMAIN:-mas}.$DOMAIN, ${RTC_SUBDOMAIN:-rtc}.$DOMAIN, ${MATRIX_SUBDOMAIN:-matrix}.$DOMAIN"
+    log "INFO" "安装目录: ${INSTALL_DIR:-/opt/matrix-ess}"
+    log "INFO" "命名空间: ${NAMESPACE:-ess}"
+    log "INFO" "端口: HTTP=${HTTP_PORT:-8080}, HTTPS=${HTTPS_PORT:-8443}, 联邦=${FEDERATION_PORT:-8448}"
+    log "INFO" "证书邮箱: ${CERT_EMAIL:-admin@$DOMAIN}"
+    log "INFO" "证书验证: ${CERT_CHALLENGE:-dns}"
+    if [[ "${CERT_CHALLENGE:-dns}" == "dns" ]]; then
+        log "INFO" "DNS提供商: ${DNS_PROVIDER:-cloudflare}"
+    fi
+    if [[ -n "${DEBUG:-}" ]]; then
+        log "INFO" "调试模式: 已启用"
+    fi
 
-                        case "$dns_provider_choice" in
-                            "1")
-                                export DNS_PROVIDER="cloudflare"
-                                log "INFO" "已选择Cloudflare DNS"
-
-                                if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-                                    echo
-                                    log "WARNING" "需要Cloudflare API Token"
-                                    log "INFO" "获取地址: https://dash.cloudflare.com/profile/api-tokens"
-                                    log "INFO" "权限需要: Zone:Zone:Read, Zone:DNS:Edit"
-                                    read -p "请输入Cloudflare API Token: " cf_token
-                                    if [[ -n "$cf_token" ]]; then
-                                        export CLOUDFLARE_API_TOKEN="$cf_token"
-                                        log "SUCCESS" "Cloudflare API Token已设置"
-                                    else
-                                        log "ERROR" "API Token不能为空"
-                                        exit 1
-                                    fi
-                                fi
-                                ;;
-                            "2")
-                                export DNS_PROVIDER="route53"
-                                log "INFO" "已选择AWS Route53"
-                                log "WARNING" "请确保已配置AWS凭据"
-                                ;;
-                            "3")
-                                export DNS_PROVIDER="digitalocean"
-                                log "INFO" "已选择DigitalOcean"
-                                log "WARNING" "请确保已设置DO_API_TOKEN环境变量"
-                                ;;
-                            *)
-                                log "WARNING" "无效选择，使用默认Cloudflare"
-                                export DNS_PROVIDER="cloudflare"
-                                ;;
-                        esac
-                        ;;
-                    "2")
-                        export CERT_CHALLENGE="http"
-                        log "INFO" "已选择HTTP验证"
-                        log "WARNING" "请确保80端口可以从互联网访问"
-                        ;;
-                    *)
-                        log "WARNING" "无效选择，使用默认DNS验证"
-                        export CERT_CHALLENGE="dns"
-                        export DNS_PROVIDER="cloudflare"
-                        ;;
-                esac
-
-                log "SUCCESS" "环境变量配置完成"
-                log "INFO" "域名: $DOMAIN"
-                log "INFO" "HTTP端口: $HTTP_PORT"
-                log "INFO" "HTTPS端口: $HTTPS_PORT"
-                log "INFO" "证书验证: $CERT_CHALLENGE"
-                if [[ "$CERT_CHALLENGE" == "dns" ]]; then
-                    log "INFO" "DNS提供商: $DNS_PROVIDER"
-                fi
+    echo
+    read -p "确认配置并继续部署? [Y/n]: " confirm_deploy
+    if [[ ! "$confirm_deploy" =~ ^[Nn]$ ]]; then
+        log "SUCCESS" "配置确认，开始部署..."
+    else
+        log "INFO" "取消部署"
+        exit 0
+    fi
             fi
         fi
     fi
