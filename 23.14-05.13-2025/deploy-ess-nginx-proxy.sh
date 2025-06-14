@@ -1243,7 +1243,7 @@ EOF
     print_success "Nginx配置完成"
 }
 
-# 生成ESS配置
+# 生成ESS配置 (两阶段方法)
 generate_ess_config() {
     print_info "生成ESS配置..."
 
@@ -1257,10 +1257,11 @@ generate_ess_config() {
         print_info "已备份现有配置文件"
     fi
 
-    # 基于官方schema生成正确的配置文件
-    cat > "$INSTALL_DIR/ess-values.yaml" << EOF
+    # 第一阶段: 生成基础配置模板 (不使用变量替换)
+    print_info "第一阶段: 生成基础配置模板..."
+    cat > "$INSTALL_DIR/ess-values.yaml" << 'EOF'
 # ESS外部Nginx反代配置
-serverName: "$DOMAIN"
+serverName: "DOMAIN_PLACEHOLDER"
 
 # 全局Ingress配置 - 禁用TLS (由外部Nginx处理)
 ingress:
@@ -1271,43 +1272,63 @@ ingress:
 # Element Web配置
 elementWeb:
   ingress:
-    host: "$WEB_SUBDOMAIN.$DOMAIN"
+    host: "WEB_SUBDOMAIN_PLACEHOLDER.DOMAIN_PLACEHOLDER"
     tlsEnabled: false
 
 # Matrix Authentication Service配置
 matrixAuthenticationService:
   ingress:
-    host: "$AUTH_SUBDOMAIN.$DOMAIN"
+    host: "AUTH_SUBDOMAIN_PLACEHOLDER.DOMAIN_PLACEHOLDER"
     tlsEnabled: false
 
 # Matrix RTC配置
 matrixRTC:
   ingress:
-    host: "$RTC_SUBDOMAIN.$DOMAIN"
+    host: "RTC_SUBDOMAIN_PLACEHOLDER.DOMAIN_PLACEHOLDER"
     tlsEnabled: false
   sfu:
     exposedServices:
       rtcTcp:
         enabled: true
         portType: NodePort
-        port: $WEBRTC_TCP_PORT
+        port: WEBRTC_TCP_PORT_PLACEHOLDER
       rtcMuxedUdp:
         enabled: true
         portType: NodePort
-        port: $WEBRTC_UDP_PORT
+        port: WEBRTC_UDP_PORT_PLACEHOLDER
 
 # Synapse配置
 synapse:
   ingress:
-    host: "$MATRIX_SUBDOMAIN.$DOMAIN"
+    host: "MATRIX_SUBDOMAIN_PLACEHOLDER.DOMAIN_PLACEHOLDER"
     tlsEnabled: false
 
-# Well-known配置 (基于官方schema - 移除不支持的host属性)
+# Well-known配置 (基于官方schema)
 wellKnownDelegation:
   enabled: true
   ingress:
     tlsEnabled: false
 EOF
+
+    # 第二阶段: 替换占位符为实际值
+    print_info "第二阶段: 替换配置变量..."
+
+    # 使用sed进行安全的变量替换
+    sed -i "s/DOMAIN_PLACEHOLDER/$DOMAIN/g" "$INSTALL_DIR/ess-values.yaml"
+    sed -i "s/WEB_SUBDOMAIN_PLACEHOLDER/$WEB_SUBDOMAIN/g" "$INSTALL_DIR/ess-values.yaml"
+    sed -i "s/AUTH_SUBDOMAIN_PLACEHOLDER/$AUTH_SUBDOMAIN/g" "$INSTALL_DIR/ess-values.yaml"
+    sed -i "s/RTC_SUBDOMAIN_PLACEHOLDER/$RTC_SUBDOMAIN/g" "$INSTALL_DIR/ess-values.yaml"
+    sed -i "s/MATRIX_SUBDOMAIN_PLACEHOLDER/$MATRIX_SUBDOMAIN/g" "$INSTALL_DIR/ess-values.yaml"
+    sed -i "s/WEBRTC_TCP_PORT_PLACEHOLDER/$WEBRTC_TCP_PORT/g" "$INSTALL_DIR/ess-values.yaml"
+    sed -i "s/WEBRTC_UDP_PORT_PLACEHOLDER/$WEBRTC_UDP_PORT/g" "$INSTALL_DIR/ess-values.yaml"
+
+    # 第三阶段: 验证和后处理
+    print_info "第三阶段: 验证配置文件..."
+
+    # 确保端口值是纯数字 (移除可能的引号或注释)
+    sed -i 's/port: "\([0-9]*\)"/port: \1/g' "$INSTALL_DIR/ess-values.yaml"
+    sed -i 's/port: \([0-9]*\)".*$/port: \1/' "$INSTALL_DIR/ess-values.yaml"
+    sed -i 's/port: \([0-9]*\)#.*$/port: \1/' "$INSTALL_DIR/ess-values.yaml"
 
     # 验证生成的配置文件
     if [[ -f "$INSTALL_DIR/ess-values.yaml" ]]; then
