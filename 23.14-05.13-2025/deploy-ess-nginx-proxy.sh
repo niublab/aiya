@@ -301,10 +301,29 @@ EOF
 
     # 等待Pod就绪，但允许失败
     if kubectl get pods -n kube-system --no-headers 2>/dev/null | grep -q .; then
-        kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=300s || {
-            print_warning "部分系统Pod可能未就绪，但继续部署"
+        print_info "等待系统Pod就绪 (最多5分钟)..."
+        if kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=300s; then
+            print_success "所有系统Pod已就绪"
+        else
+            print_warning "部分系统Pod可能未就绪，检查状态..."
             kubectl get pods -n kube-system
-        }
+
+            # 检查是否有足够的Pod在运行
+            local running_pods=$(kubectl get pods -n kube-system --no-headers | grep "Running" | wc -l)
+            local total_pods=$(kubectl get pods -n kube-system --no-headers | wc -l)
+
+            print_info "Pod状态: $running_pods/$total_pods 运行中"
+
+            if [[ $running_pods -ge 3 ]]; then
+                print_warning "有足够的系统Pod运行，继续部署"
+            else
+                print_error "系统Pod数量不足，可能影响部署"
+                print_info "检查K3s日志: journalctl -u k3s -n 50"
+
+                # 显示详细的Pod状态
+                kubectl describe pods -n kube-system | grep -E "(Name:|Status:|Reason:|Message:)" || true
+            fi
+        fi
     else
         print_warning "未发现系统Pod，跳过等待"
     fi
@@ -327,6 +346,50 @@ EOF
             print_warning "$pod 可能未就绪"
         fi
     done
+
+    # 检查容器运行时状态
+    check_container_runtime_status
+}
+
+# 检查容器运行时状态
+check_container_runtime_status() {
+    print_info "检查容器运行时状态..."
+
+    # 检查containerd状态
+    if systemctl is-active --quiet containerd 2>/dev/null; then
+        print_success "containerd服务运行正常"
+    else
+        print_warning "containerd服务可能有问题"
+    fi
+
+    # 检查K3s容器
+    if command -v crictl >/dev/null 2>&1; then
+        local running_containers=$(crictl ps -q 2>/dev/null | wc -l)
+        print_info "运行中的容器数量: $running_containers"
+
+        if [[ $running_containers -gt 0 ]]; then
+            print_success "容器运行时正常"
+        else
+            print_warning "没有运行中的容器"
+        fi
+
+        # 检查容器状态
+        print_info "容器状态概览:"
+        crictl ps 2>/dev/null | head -10 || print_warning "无法获取容器状态"
+    else
+        print_warning "crictl命令不可用"
+    fi
+
+    # 检查K3s日志中的错误
+    print_info "检查K3s服务日志中的错误..."
+    local error_count=$(journalctl -u k3s --since "5 minutes ago" | grep -i "error\|failed\|fatal" | wc -l)
+    if [[ $error_count -gt 0 ]]; then
+        print_warning "发现 $error_count 个错误日志条目"
+        print_info "最近的错误日志:"
+        journalctl -u k3s --since "5 minutes ago" | grep -i "error\|failed\|fatal" | tail -5
+    else
+        print_success "K3s日志中无严重错误"
+    fi
 }
 
 # 修复K3s连接问题
