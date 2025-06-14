@@ -29,6 +29,10 @@ DOMAIN="${DOMAIN:-your-domain.com}"
 HTTP_PORT="${HTTP_PORT:-8080}"
 HTTPS_PORT="${HTTPS_PORT:-8443}"
 FEDERATION_PORT="${FEDERATION_PORT:-8448}"
+WEBRTC_TCP_PORT="${WEBRTC_TCP_PORT:-30881}"
+WEBRTC_UDP_PORT="${WEBRTC_UDP_PORT:-30882}"
+WEBRTC_UDP_RANGE_START="${WEBRTC_UDP_RANGE_START:-30152}"
+WEBRTC_UDP_RANGE_END="${WEBRTC_UDP_RANGE_END:-30352}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/matrix-ess}"
 NAMESPACE="${NAMESPACE:-ess}"
 
@@ -132,9 +136,9 @@ configure_firewall() {
     ufw allow $FEDERATION_PORT/tcp
     
     # 允许WebRTC端口
-    ufw allow 30881/tcp
-    ufw allow 30882/udp
-    ufw allow 30152:30352/udp
+    ufw allow $WEBRTC_TCP_PORT/tcp
+    ufw allow $WEBRTC_UDP_PORT/udp
+    ufw allow $WEBRTC_UDP_RANGE_START:$WEBRTC_UDP_RANGE_END/udp
     
     # 启用防火墙
     ufw --force enable
@@ -948,11 +952,11 @@ matrixRTC:
       rtcTcp:
         enabled: true
         portType: NodePort
-        port: 30881
+        port: $WEBRTC_TCP_PORT
       rtcMuxedUdp:
         enabled: true
         portType: NodePort
-        port: 30882
+        port: $WEBRTC_UDP_PORT
 
 # Synapse配置
 synapse:
@@ -1101,9 +1105,9 @@ show_access_info() {
     echo "  $HTTP_PORT -> 服务器IP:$HTTP_PORT"
     echo "  $HTTPS_PORT -> 服务器IP:$HTTPS_PORT"
     echo "  $FEDERATION_PORT -> 服务器IP:$FEDERATION_PORT"
-    echo "  30881 -> 服务器IP:30881"
-    echo "  30882 -> 服务器IP:30882"
-    echo "  30152-30352 -> 服务器IP:30152-30352"
+    echo "  $WEBRTC_TCP_PORT -> 服务器IP:$WEBRTC_TCP_PORT"
+    echo "  $WEBRTC_UDP_PORT -> 服务器IP:$WEBRTC_UDP_PORT"
+    echo "  $WEBRTC_UDP_RANGE_START-$WEBRTC_UDP_RANGE_END -> 服务器IP:$WEBRTC_UDP_RANGE_START-$WEBRTC_UDP_RANGE_END"
 }
 
 # 主函数

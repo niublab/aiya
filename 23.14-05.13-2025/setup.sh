@@ -289,6 +289,22 @@ interactive_configuration() {
     read -p "联邦端口 [8448]: " user_federation_port
     export FEDERATION_PORT="${user_federation_port:-8448}"
 
+    # WebRTC端口配置 (高级用户)
+    read -p "配置WebRTC端口? [y/N]: " config_webrtc
+    if [[ "$config_webrtc" =~ ^[Yy]$ ]]; then
+        read -p "WebRTC TCP端口 [30881]: " user_webrtc_tcp
+        export WEBRTC_TCP_PORT="${user_webrtc_tcp:-30881}"
+
+        read -p "WebRTC UDP端口 [30882]: " user_webrtc_udp
+        export WEBRTC_UDP_PORT="${user_webrtc_udp:-30882}"
+
+        read -p "WebRTC UDP范围开始 [30152]: " user_webrtc_start
+        export WEBRTC_UDP_RANGE_START="${user_webrtc_start:-30152}"
+
+        read -p "WebRTC UDP范围结束 [30352]: " user_webrtc_end
+        export WEBRTC_UDP_RANGE_END="${user_webrtc_end:-30352}"
+    fi
+
     # 5. 邮箱配置
     echo
     log "INFO" "5. 邮箱配置"
