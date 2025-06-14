@@ -1269,11 +1269,11 @@ matrixRTC:
       rtcTcp:
         enabled: true
         portType: NodePort
-        port: $WEBRTC_TCP_PORT
+        port: ${WEBRTC_TCP_PORT}
       rtcMuxedUdp:
         enabled: true
         portType: NodePort
-        port: $WEBRTC_UDP_PORT
+        port: ${WEBRTC_UDP_PORT}
 
 # Synapse配置
 synapse:
@@ -1285,7 +1285,6 @@ synapse:
 wellKnownDelegation:
   enabled: true
   ingress:
-    host: "$DOMAIN"
     tlsEnabled: false
 EOF
     
