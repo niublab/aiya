@@ -430,9 +430,6 @@ interactive_configuration() {
         log "INFO" "取消部署"
         exit 0
     fi
-            fi
-        fi
-    fi
 }
 
 # 部署ESS-Helm方案
